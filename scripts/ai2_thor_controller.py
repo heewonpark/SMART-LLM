@@ -136,15 +136,15 @@ def exec_actions():
                 print (e)
                 
             for i,e in enumerate(multi_agent_event.events):
-                cv2.imshow('agent%s' % i, e.cv2img)
+                #cv2.imshow('agent%s' % i, e.cv2img)
                 f_name = os.path.dirname(__file__) + "/agent_" + str(i+1) + "/img_" + str(img_counter).zfill(5) + ".png"
                 cv2.imwrite(f_name, e.cv2img)
             top_view_rgb = cv2.cvtColor(c.last_event.events[0].third_party_camera_frames[-1], cv2.COLOR_BGR2RGB)
-            cv2.imshow('Top View', top_view_rgb)
+            #cv2.imshow('Top View', top_view_rgb)
             f_name = os.path.dirname(__file__) + "/top_view/img_" + str(img_counter).zfill(5) + ".png"
             cv2.imwrite(f_name, e.cv2img)
-            if cv2.waitKey(25) & 0xFF == ord('q'):
-                break
+            #if cv2.waitKey(25) & 0xFF == ord('q'):
+            #    break
             
             img_counter += 1    
             action_queue.pop(0)
