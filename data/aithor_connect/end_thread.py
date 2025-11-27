@@ -6,10 +6,10 @@ for i in range(25):
     time.sleep(0.1)
 
 task_over = True
-time.sleep(5)
+time.sleep(10)
 
-
-exec = float(success_exec) / float(total_exec)
+print("execs", success_exec, total_exec)
+#exec = float(success_exec) / float(total_exec)
 
 print (ground_truth)
 objs = list([obj for obj in c.last_event.metadata["objects"]])
@@ -92,6 +92,6 @@ else:
 if tc == 1 and ru == 1:
     sr = 1
 
-print (f"SR:{sr}, TC:{tc}, GCR:{gcr}, Exec:{exec}, RU:{ru}")
+#print (f"SR:{sr}, TC:{tc}, GCR:{gcr}, Exec:{exec}, RU:{ru}")
 
 generate_video()

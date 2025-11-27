@@ -36,7 +36,7 @@ def generate_video():
             print("The input path: {} you specified does not exist.".format(imgs_folder))
         else:
             command_set = ['ffmpeg', '-i',
-                                '{}/img_%05d.png'.format(imgs_folder), 
+                                '{}img_%05d.png'.format(imgs_folder), 
                                 '-framerate', str(frame_rate),
                                 '-pix_fmt', 'yuv420p',
                                 '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]

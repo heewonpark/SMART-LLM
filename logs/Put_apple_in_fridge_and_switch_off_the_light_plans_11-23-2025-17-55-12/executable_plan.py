@@ -1,3 +1,59 @@
+import math
+import re
+import shutil
+import subprocess
+import time
+import threading
+import cv2
+import numpy as np
+from ai2thor.controller import Controller
+from scipy.spatial import distance
+from typing import Tuple
+from collections import deque
+import random
+import os
+from glob import glob
+from bus import Bus
+
+def closest_node(node, nodes, no_robot, clost_node_location):
+    crps = []
+    distances = distance.cdist([node], nodes)[0]
+    dist_indices = np.argsort(np.array(distances))
+    for i in range(no_robot):
+        pos_index = dist_indices[(i * 5) + clost_node_location[i]]
+        crps.append (nodes[pos_index])
+    return crps
+
+def distance_pts(p1: Tuple[float, float, float], p2: Tuple[float, float, float]):
+    return ((p1[0] - p2[0]) ** 2 + (p1[2] - p2[2]) ** 2) ** 0.5
+
+def generate_video():
+    frame_rate = 5
+    # input_path, prefix, char_id=0, image_synthesis=['normal'], frame_rate=5
+    cur_path = os.path.dirname(__file__) + "/*/"
+    for imgs_folder in glob(cur_path, recursive = False):
+        view = imgs_folder.split('/')[-2]
+        if not os.path.isdir(imgs_folder):
+            print("The input path: {} you specified does not exist.".format(imgs_folder))
+        else:
+            command_set = ['ffmpeg', '-i',
+                                '{}img_%05d.png'.format(imgs_folder), 
+                                '-framerate', str(frame_rate),
+                                '-pix_fmt', 'yuv420p',
+                                '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]
+            subprocess.call(command_set)
+        
+
+
+
+robots = [{'name': 'robot1', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot2', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot3', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}]
+
+floor_no = 15
+
+
+ground_truth = [{'name': 'Fridge', 'contains': ['Apple'], 'state': None}, {'name': 'LightSwitch', 'contains': [], 'state': 'OFF'}]
+no_trans_gt = 1
+max_trans = 1
 
 
 total_exec = 0
@@ -508,3 +564,155 @@ def ThrowObject(robot, sw_obj):
     
     action_queue.append({'action':'ThrowObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
+
+def put_apple_in_fridge(robot_list):
+    # robot_list = [robot1]
+    # 0: SubTask 1: Put apple in the fridge
+    # 1: Go to the Apple using robot1.
+    GoToObject(robot_list[0],'Apple')
+    # 2: Pick up the Apple using robot1.
+    PickupObject(robot_list[0],'Apple')
+    # 3: Go to the Fridge using robot1.
+    GoToObject(robot_list[0],'Fridge')
+    # 4: Open the Fridge using robot1.
+    #OpenObject(robot_list[0],'Fridge')
+
+    bus = Bus.get()
+    bus.publish("help", {"requester", "robot1"})
+    bus.wait("opened")
+
+    # 5: Put Apple in the Fridge using robot1
+    PutObject(robot_list[0],'Apple', 'Fridge')
+    # 6: Close Fridge using robot1
+    #CloseObject(robot_list[0],'Fridge')
+
+def switch_off_light(robot_list):
+    # robot_list = [robot2]
+    # 0: SubTask 2: Switch off the light
+    # 1: Go to the LightSwitch using robot2.
+    GoToObject(robot_list[0],'LightSwitch')
+    # 2: Switch off the LightSwitch using robot2.
+    SwitchOff(robot_list[0],'LightSwitch')
+
+
+def open_fridge_door(robot_list):
+    bus = Bus.get()
+    bus.wait("help")
+    GoToObject(robot_list[0], 'Fridge')
+    OpenObject(robot_list[0], 'Fridge')
+    bus.publish("opened", {"by", "robot2"})
+
+
+# Parallelize SubTask 1 and SubTask 2
+task1_thread = threading.Thread(target=put_apple_in_fridge, args=([robots[0]],))
+task2_thread = threading.Thread(target=open_fridge_door, args=([robots[1]],))
+
+# Start executing SubTask 1 and SubTask 2 in parallel
+task1_thread.start()
+task2_thread.start()
+
+# Wait for both SubTask 1 and SubTask 2 to finish
+task1_thread.join()
+task2_thread.join()
+
+# Task put apple in fridge and switch off the light is done
+
+no_trans = 1
+
+for i in range(25):
+    action_queue.append({'action':'Done'})
+    action_queue.append({'action':'Done'})
+    action_queue.append({'action':'Done'})
+    time.sleep(0.1)
+
+task_over = True
+time.sleep(10)
+
+print("execs", success_exec, total_exec)
+#exec = float(success_exec) / float(total_exec)
+
+print (ground_truth)
+objs = list([obj for obj in c.last_event.metadata["objects"]])
+
+gcr_tasks = 0.0
+gcr_complete = 0.0
+for obj_gt in ground_truth:
+    obj_name = obj_gt['name']
+    state = obj_gt['state']
+    contains = obj_gt['contains']
+    gcr_tasks += 1
+    for obj in objs:
+        # if obj_name in obj["name"]:
+        #     print (obj)
+        if state == 'SLICED':
+            if obj_name in obj["name"] and obj["isSliced"]:
+                gcr_complete += 1 
+                
+        if state == 'OFF':
+            if obj_name in obj["name"] and not obj["isToggled"]:
+                gcr_complete += 1 
+        
+        if state == 'ON':
+            if obj_name in obj["name"] and obj["isToggled"]:
+                gcr_complete += 1 
+        
+        if state == 'HOT':
+            # print (obj)
+            if obj_name in obj["name"] and obj["temperature"] == 'Hot':
+                gcr_complete += 1 
+                
+        if state == 'COOKED':
+            if obj_name in obj["name"] and obj["isCooked"]:
+                gcr_complete += 1 
+                
+        if state == 'OPENED':
+            if obj_name in obj["name"] and obj["isOpen"]:
+                gcr_complete += 1 
+                
+        if state == 'CLOSED':
+            if obj_name in obj["name"] and not obj["isOpen"]:
+                gcr_complete += 1 
+                
+        if state == 'PICKED':
+            if obj_name in obj["name"] and obj["isPickedUp"]:
+                gcr_complete += 1 
+        
+        if len(contains) != 0 and obj_name in obj["name"]:
+            print (contains, obj_name, obj["name"])   
+            for rec in contains:
+                if obj['receptacleObjectIds'] is not None:
+                    for r in obj['receptacleObjectIds']:
+                        print (rec, r)
+                        if rec in r:
+                            print (rec, r)
+                            gcr_complete += 1 
+                    
+            
+             
+sr = 0
+tc = 0
+if gcr_tasks == 0:
+    gcr = 1
+else:
+    gcr = gcr_complete / gcr_tasks
+
+if gcr == 1.0:
+    tc = 1 
+    
+max_trans += 1
+no_trans_gt += 1
+print (no_trans_gt, max_trans, no_trans)
+if max_trans == no_trans_gt and no_trans_gt == no_trans:
+    ru = 1
+elif max_trans == no_trans_gt:
+    ru = 0
+else:
+    ru =  (max_trans - no_trans) / (max_trans - no_trans_gt)
+
+if tc == 1 and ru == 1:
+    sr = 1
+
+#print (f"SR:{sr}, TC:{tc}, GCR:{gcr}, Exec:{exec}, RU:{ru}")
+
+generate_video()
+

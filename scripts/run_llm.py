@@ -10,7 +10,7 @@ import subprocess
 
 from openai import OpenAI
 openai_api_key = "api_key"
-client = OpenAI(api_key=Path(openai_api_key + '.txt').read_text())
+client = OpenAI(api_key=Path(openai_api_key + '.txt').read_text().strip())
 import ai2thor.controller
 
 import sys
@@ -43,7 +43,7 @@ def LM(prompt, gpt_version, max_tokens=128, temperature=0, stop=None, logprobs=1
         return response, response.choices[0].message.content.strip()
 
 def set_api_key(openai_api_key):
-    OpenAI.api_key = Path(openai_api_key + '.txt').read_text()    
+    OpenAI.api_key = Path(openai_api_key + '.txt').read_text().strip()    
 
 # Function returns object list with name and properties.
 def convert_to_dict_objprop(objs, obj_mass):
@@ -96,6 +96,7 @@ if __name__ == "__main__":
     max_trans_cnt_tasks = []  
     with open (f"./data/{args.test_set}/FloorPlan{args.floor_plan}.json", "r") as f:
         for line in f.readlines():
+            print("MMMMMMMMMM LINES", line)
             test_tasks.append(list(json.loads(line).values())[0])
             robots_test_tasks.append(list(json.loads(line).values())[1])
             gt_test_tasks.append(list(json.loads(line).values())[2])

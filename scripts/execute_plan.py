@@ -51,8 +51,8 @@ def compile_aithor_exec_file(expt_name):
     terminate_plan = Path(os.getcwd() + "/data/aithor_connect/end_thread.py").read_text()
     executable_plan += (terminate_plan + "\n")
 
-    with open(f"{log_path}/executable_plan.py", 'w') as d:
-        d.write(executable_plan)
+    #with open(f"{log_path}/executable_plan.py", 'w') as d:
+    #    d.write(executable_plan)
         
     return (f"{log_path}/executable_plan.py")
 
