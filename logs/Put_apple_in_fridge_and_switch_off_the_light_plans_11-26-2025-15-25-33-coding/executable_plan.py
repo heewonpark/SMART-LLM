@@ -14,6 +14,13 @@ import random
 import os
 from glob import glob
 
+from task_manager import TaskManager
+
+import logging
+from pprint import pprint
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d (%(funcName)s) - %(message)s')
+
 def closest_node(node, nodes, no_robot, clost_node_location):
     crps = []
     distances = distance.cdist([node], nodes)[0]
@@ -42,10 +49,13 @@ def generate_video():
                                 '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]
             subprocess.call(command_set)
         
-
+task_manager = TaskManager()
 
 
 robots = [{'name': 'robot1', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot2', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot3', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}]
+
+for robot in robots:
+    task_manager.register_agent(robot["name"])
 
 floor_no = 15
 
@@ -239,14 +249,23 @@ def exec_actions():
 actions_thread = threading.Thread(target=exec_actions)
 actions_thread.start()
 
+def GetRobot(robot_name):
+    for robot in robots:
+        if robot["name"] is robot_name:
+            return robot
+    return None
+
 def GoToObject(robots, dest_obj):
     global recp_id
     
     # check if robots is a list
-    
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
+    
+    for robot in robots:
+        task_manager.add_task(robot["name"], "GoToObject")
+
     no_agents = len (robots)
     # robots distance to the goal 
     dist_goals = [10.0] * len(robots)
@@ -348,11 +367,18 @@ def GoToObject(robots, dest_obj):
     print ("Reached: ", dest_obj)
     if dest_obj == "Cabinet" or dest_obj == "Fridge" or dest_obj == "CounterTop":
         recp_id = dest_obj_id
-    
+
+    for robot in robots:
+        task_manager.complete_task(agent_id=robot["name"], task_name="GoToObject", success=True)
+        
 def PickupObject(robots, pick_obj):
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
+       
+    for robot in robots:
+        task_manager.add_task(robot["name"], "PickupObject")
+
     no_agents = len (robots)
     # robots distance to the goal 
     for idx in range(no_agents):
@@ -377,9 +403,15 @@ def PickupObject(robots, pick_obj):
         action_queue.append({'action':'PickupObject', 'objectId':pick_obj_id, 'agent_id':agent_id})
         time.sleep(1)
     
+    for robot in robots:
+        task_manager.complete_task(agent_id=robot["name"], task_name="PickupObject", success=True)
+    
 def PutObject(robot, put_obj, recp):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
+
+    task_manager.add_task(robot["name"], "PutObject")
+
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
     objs_dists = list([obj["distance"] for obj in c.last_event.metadata["objects"]])
@@ -404,7 +436,9 @@ def PutObject(robot, put_obj, recp):
     # time.sleep(1)
     action_queue.append({'action':'PutObject', 'objectId':recp_obj_id, 'agent_id':agent_id})
     time.sleep(1)
-         
+    
+    task_manager.complete_task(agent_id=robot["name"], task_name="PutObject", success=True)
+
 def SwitchOn(robot, sw_obj):
     print ("Switching On: ", sw_obj)
     robot_name = robot['name']
@@ -440,6 +474,8 @@ def SwitchOff(robot, sw_obj):
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     
+    task_manager.add_task(robot["name"], "SwitchOff")
+
     # turn on all stove burner
     if sw_obj == "StoveKnob":
         for obj in objs:
@@ -459,33 +495,143 @@ def SwitchOff(robot, sw_obj):
         GoToObject(robot, sw_obj_id)
         time.sleep(1)
         action_queue.append({'action':'ToggleObjectOff', 'objectId':sw_obj_id, 'agent_id':agent_id})
-        time.sleep(1)      
+        time.sleep(1)     
+
+    task_manager.complete_task(agent_id=robot["name"], task_name="SwitchOff", success=True) 
+
+def IsHoldingObject(robot):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    metadata = c.last_event.events[agent_id].metadata
     
+    if len(metadata["inventoryObjects"]) > 0:
+        logging.debug("Holding Item ")
+        print(metadata["inventoryObjects"])
+        return True
+    else:
+        logging.debug("No Holding Item")
+        return False
+
+def dist2d(p, q):
+    return math.sqrt((p["x"] - q["x"])**2 + (p["z"] - q["z"])**2)
+
+def FindParkingSpot(avoid_targets, min_clearance=1.0):
+    """
+    controller : ai2thor Controller (for this agent)
+    other_agents : list of other agents' positions [{"x", "y", "z"}, ...]
+    min_clearance : minimum distance required from other agents (meters)
+    """
+    reachable = c.step(action="GetReachablePositions").metadata["reachablePositions"]  # [{x,y,z}, ...]
+
+    safe_candidates = []
+    for p in reachable:
+         # Must be at least min_clearance away from all other agents to be considered safe
+        if all(dist2d(p, a) >= min_clearance for a in avoid_targets):
+            safe_candidates.append(p)
+
+    if not safe_candidates:
+        print("[Parking] No safe position found with given clearance.")
+        return None
+
+    # For each candidate, compute the minimum distance to other agents
+    # Select the position with the maximum minimum distance → the most spacious area
+    def min_dist_to_others(p):
+        if not avoid_targets:
+            return float("inf")
+        return min(dist2d(p, a) for a in avoid_targets)
+
+    best = max(safe_candidates, key=min_dist_to_others)
+    return best
+
+def StepAside(robot, sw_obj):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    
+    task_manager.add_task(robot["name"], "StepAside")
+
+    objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
+    objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
+
+    avoid_targets = []
+    if "|" in sw_obj:
+        # obj alredy given
+        dest_obj_id = sw_obj
+        pos_arr = dest_obj_id.split("|")
+        dest_obj_center = {'x': float(pos_arr[1]), 'y': float(pos_arr[2]), 'z': float(pos_arr[3])}
+    else:
+        for idx, obj in enumerate(objs):
+            match = re.match(sw_obj, obj)
+            if match is not None:
+                dest_obj_id = obj
+                dest_obj_center = objs_center[idx]
+                if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+                    break # find the first instance
+    
+    avoid_targets.append(dest_obj_center)
+    
+    for i, agent in enumerate(c.last_event.events):
+        if i != agent_id: 
+            avoid_targets.append(agent.metadata['agent']['position'])
+        else:
+            print("curr position", agent.metadata['agent']['position'])
+        
+    parking_spot = FindParkingSpot(avoid_targets)
+    print("parking_spot ", parking_spot)
+    time.sleep(1)
+    action_queue.append({'action':'ObjectNavExpertAction', 'position':dict(x=parking_spot['x'], y=parking_spot['y'], z=parking_spot['z']), 'agent_id':agent_id})
+    time.sleep(1)
+    task_manager.complete_task(agent_id=robot["name"], task_name="StepAside", success=True)
+
+
 def OpenObject(robot, sw_obj):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
-    
+
+    task_manager.add_task(robot["name"], "OpenObject")
+
     for obj in objs:
         match = re.match(sw_obj, obj)
         if match is not None:
             sw_obj_id = obj
             break # find the first instance
-        
+    
     global recp_id
+    print("recp_id ", recp_id)
     if recp_id is not None:
         sw_obj_id = recp_id
     
     GoToObject(robot, sw_obj_id)
-    time.sleep(1)
-    action_queue.append({'action':'OpenObject', 'objectId':sw_obj_id, 'agent_id':agent_id})
-    time.sleep(1)
+
+    if IsHoldingObject(robot):
+        logging.debug("Robot is holding item")
+        task_manager.debug_print()
+        idle_agents = task_manager.find_idle_agents()
+        print(idle_agents)
+        idle_robot = GetRobot(idle_agents[0])
+
+        task_manager.complete_task(agent_id=robot["name"], task_name="OpenObject", success=False) 
+
+        StepAside(robot, sw_obj)
+
+        GoToObject(idle_robot, sw_obj)
+        OpenObject(idle_robot, sw_obj)
+    else:
+        logging.debug("Robot is not holding item")
+
+        time.sleep(1)
+        action_queue.append({'action':'OpenObject', 'objectId':sw_obj_id, 'agent_id':agent_id})
+        time.sleep(1)
+
+        task_manager.complete_task(agent_id=robot["name"], task_name="OpenObject", success=True)
     
 def CloseObject(robot, sw_obj):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
-    
+
+    task_manager.add_task(robot["name"], "CloseObject")
+
     for obj in objs:
         match = re.match(sw_obj, obj)
         if match is not None:
@@ -500,10 +646,12 @@ def CloseObject(robot, sw_obj):
     time.sleep(1)
     
     action_queue.append({'action':'CloseObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
-    
+
     if recp_id is not None:
         recp_id = None
     time.sleep(1)
+
+    task_manager.complete_task(agent_id=robot["name"], task_name="CloseObject", success=True) 
     
 def BreakObject(robot, sw_obj):
     robot_name = robot['name']
@@ -615,7 +763,7 @@ time.sleep(5)
 
 exec = float(success_exec) / float(total_exec)
 
-print (ground_truth)
+print ("Ground Truth: ",ground_truth)
 objs = list([obj for obj in c.last_event.metadata["objects"]])
 
 gcr_tasks = 0.0
