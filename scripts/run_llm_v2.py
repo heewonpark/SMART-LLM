@@ -77,7 +77,7 @@ if __name__ == "__main__":
                         choices=['train_task_allocation'])
 
     parser.add_argument("--test-set", type=str, default="final_test", 
-                        choices=['final_test'])
+                        choices=['final_test','project'])
 
     parser.add_argument("--log-results", type=bool, default=True)
 
@@ -94,14 +94,19 @@ if __name__ == "__main__":
     gt_test_tasks = []    
     trans_cnt_tasks = []
     max_trans_cnt_tasks = []  
-
+    set_agent_tasks = []
+    set_object_tasks = []
     with open (f"./data/{args.test_set}/FloorPlan{args.floor_plan}.json", "r") as f:
         for line in f.readlines():
+            print(line)
+            print(list(json.loads(line).values()))
             test_tasks.append(list(json.loads(line).values())[0])
             robots_test_tasks.append(list(json.loads(line).values())[1])
             gt_test_tasks.append(list(json.loads(line).values())[2])
             trans_cnt_tasks.append(list(json.loads(line).values())[3])
             max_trans_cnt_tasks.append(list(json.loads(line).values())[4])
+            set_agent_tasks.append(list(json.loads(line).values())[5])
+            set_object_tasks.append(list(json.loads(line).values())[6])
 
     print(f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n")
     # prepare list of robots for the tasks
@@ -247,6 +252,8 @@ if __name__ == "__main__":
                 f.write(f"\nground_truth = {gt_test_tasks[idx]}")
                 f.write(f"\ntrans = {trans_cnt_tasks[idx]}")
                 f.write(f"\nmax_trans = {max_trans_cnt_tasks[idx]}")
+                f.write(f"\nset_agents = {set_agent_tasks[idx]}")
+                f.write(f"\nset_objects = {set_object_tasks[idx]}")
 
             with open(f"./logs/{folder_name}/decomposed_plan.py", 'w') as d:
                 d.write(decomposed_plan[idx])

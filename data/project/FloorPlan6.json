@@ -1,0 +1,1 @@
+{"task": "Slice the tomato", "robot list" : [2,3,4], "object_states" : [{"name": "Tomato", "contains": [], "state": "SLICED"}], "trans":0, "max_trans":0, "set_agents":[], "set_objects":[{"name":"Chair", "position":[1.0,0.0,2.0]}]}
