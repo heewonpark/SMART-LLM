@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import subprocess
 import argparse
+import re
+import shutil
 
 def append_trans_ctr(allocated_plan):
     brk_ctr = 0
@@ -14,51 +16,64 @@ def append_trans_ctr(allocated_plan):
     print ("No Breaks: ", brk_ctr)
     return brk_ctr
 
+LOG_PATTERN = r"(### LOG - START ###)(.*?)(### LOG - END ###)"
+TASK_PATTERN = r"(### TASK - START ###)(.*?)(### TASK - END ###)"
+
+def insert_between_markers(text, insert_text, pattern=r"(### LOG - START ###)(.*?)(### LOG - END ###)"):
+    replacement = r"\1\n" + insert_text + r"\n\3"
+    return re.sub(pattern, replacement, text, flags=re.DOTALL)
+
 def compile_aithor_exec_file(expt_name):
     log_path = os.getcwd() + "/logs/" + expt_name
     executable_plan = ""
     
     # append the imports to the file
-    import_file = Path(os.getcwd() + "/data/aithor_connect/imports_aux_fn.py").read_text()
+    import_file = Path(os.getcwd() + "/data/aithor_connect_v2/aithor_connect.py").read_text()
     executable_plan += (import_file + "\n")
     
+    log_plan = ""
     # append the list of robots and floor plan number
     log_file = open(log_path + "/log.txt")
     log_data = log_file.readlines()
     # append the robot list
-    executable_plan += (log_data[8] + "\n")
+    log_plan += (log_data[8] + "\n")
     # append the floor number
     flr_no = log_data[4][12:]
     gt = log_data[9]
-    executable_plan += ("floor_no = " + flr_no + "\n\n")
-    executable_plan += (gt)
+    log_plan += ("floor_no = " + flr_no + "\n\n")
+    log_plan += (gt)
     trans = log_data[10][8:]
-    executable_plan += ("no_trans_gt = " + trans)
+    log_plan += ("no_trans_gt = " + trans)
     max_trans = log_data[11][12:]
-    executable_plan += ("max_trans = " + max_trans + "\n")
+    log_plan += ("max_trans = " + max_trans + "\n")
     set_agents = log_data[12][13:]
-    executable_plan += ("set_agents = " + set_agents + "\n")
+    log_plan += ("set_agents = " + set_agents + "\n")
     set_objects = log_data[13][14:]
-    executable_plan += ("set_objects = " + set_objects + "\n")  
+    log_plan += ("set_objects = " + set_objects + "\n")  
+    executable_plan = insert_between_markers(executable_plan, log_plan, LOG_PATTERN) + "\n"
 
-
-    # append the ai thoe connector and helper fns
-    connector_file = Path(os.getcwd() + "/data/aithor_connect/aithor_connect.py").read_text()
-    executable_plan += (connector_file + "\n")
+    # # append the ai thoe connector and helper fns
+    # connector_file = Path(os.getcwd() + "/data/aithor_connect/aithor_connect.py").read_text()
+    # executable_plan += (connector_file + "\n")
     
     # append the allocated plan
     allocated_plan = Path(log_path + "/code_plan.py").read_text()
     brks = append_trans_ctr(allocated_plan)
-    executable_plan += (allocated_plan + "\n")
-    executable_plan += ("no_trans = " + str(brks) + "\n")
-
-    # append the task thread termination
-    terminate_plan = Path(os.getcwd() + "/data/aithor_connect/end_thread.py").read_text()
-    executable_plan += (terminate_plan + "\n")
+    #executable_plan += (allocated_plan + "\n")
+    allocated_plan += ("\nno_trans = " + str(brks) + "\n")
+    executable_plan = insert_between_markers(executable_plan, allocated_plan, TASK_PATTERN) + "\n"
+    
+    # # append the task thread termination
+    # terminate_plan = Path(os.getcwd() + "/data/aithor_connect/end_thread.py").read_text()
+    # executable_plan += (terminate_plan + "\n")
 
     with open(f"{log_path}/executable_plan.py", 'w') as d:
         d.write(executable_plan)
-        
+
+    tm_src = Path(os.getcwd() + "/data/aithor_connect_v2/task_manager.py")
+    tm_dst = Path(log_path + "/task_manager.py")
+    shutil.copy(tm_src, tm_dst)
+
     return (f"{log_path}/executable_plan.py")
 
 parser = argparse.ArgumentParser()

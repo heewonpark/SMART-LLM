@@ -1,4 +1,68 @@
+import math
+import re
+import shutil
+import subprocess
+import time
+import threading
+import cv2
+import numpy as np
+from ai2thor.controller import Controller
+from scipy.spatial import distance
+from typing import Tuple
+from collections import deque
+import random
+import os
+from glob import glob
+import logging
+from pprint import pprint
 
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d (%(funcName)s) - %(message)s')
+
+from task_manager import TaskManager
+task_manager = TaskManager()
+
+def closest_node(node, nodes, no_robot, clost_node_location):
+    crps = []
+    distances = distance.cdist([node], nodes)[0]
+    dist_indices = np.argsort(np.array(distances))
+    for i in range(no_robot):
+        pos_index = dist_indices[(i * 5) + clost_node_location[i]]
+        crps.append (nodes[pos_index])
+    return crps
+
+def distance_pts(p1: Tuple[float, float, float], p2: Tuple[float, float, float]):
+    return ((p1[0] - p2[0]) ** 2 + (p1[2] - p2[2]) ** 2) ** 0.5
+
+def generate_video():
+    frame_rate = 5
+    # input_path, prefix, char_id=0, image_synthesis=['normal'], frame_rate=5
+    cur_path = os.path.dirname(__file__) + "/*/"
+    for imgs_folder in glob(cur_path, recursive = False):
+        view = imgs_folder.split('/')[-2]
+        if not os.path.isdir(imgs_folder):
+            print("The input path: {} you specified does not exist.".format(imgs_folder))
+        else:
+            command_set = ['ffmpeg', '-i',
+                                '{}/img_%05d.png'.format(imgs_folder), 
+                                '-framerate', str(frame_rate),
+                                '-pix_fmt', 'yuv420p',
+                                '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]
+            subprocess.call(command_set)
+
+### LOG - START ###
+robots = []
+floor_no = 1
+ground_truth = []
+no_trans_gt = 0
+max_trans = 0
+set_agents = []
+set_objects = []
+total_exec = 1
+success_exec = 0
+### LOG - END ###
+
+for robot in robots:
+    task_manager.register_agent(robot["name"])
 
 total_exec = 0
 success_exec = 0
@@ -10,6 +74,25 @@ no_robot = len(robots)
 # initialize n agents into the scene
 multi_agent_event = c.step(dict(action='Initialize', agentMode="default", snapGrid=False, gridSize=0.5, rotateStepDegrees=20, visibilityDistance=100, fieldOfView=90, agentCount=no_robot))
 
+for object_ in set_objects:
+    obj_name = object_["name"]
+    obj_pos = object_["position"]
+    objs = [obj for obj in c.last_event.metadata["objects"]
+              if obj["objectType"] == obj_name]
+
+    print(len(objs), f" {obj_name} found")
+
+    obj_id = objs[0]["objectId"]
+
+    # 새 위치로 텔레포트
+    c.step(
+        action="TeleportObject",
+        objectId=obj_id,
+        position=dict(x=obj_pos[0], y=obj_pos[1], z=obj_pos[2]),
+        rotation=dict(x=0, y=0, z=0),
+        forceAction=True
+    )
+
 # add a top view camera
 event = c.step(action="GetMapViewCameraProperties")
 event = c.step(action="AddThirdPartyCamera", **event.metadata["actionReturn"])
@@ -18,11 +101,47 @@ event = c.step(action="AddThirdPartyCamera", **event.metadata["actionReturn"])
 reachable_positions_ = c.step(action="GetReachablePositions").metadata["actionReturn"]
 reachable_positions = positions_tuple = [(p["x"], p["y"], p["z"]) for p in reachable_positions_]
 
-# randomize postions of the agents
-for i in range (no_robot):
-    init_pos = random.choice(reachable_positions_)
-    c.step(dict(action="Teleport", position=init_pos, agentId=i))
-    
+# # randomize postions of the agents
+# for i in range (no_robot):
+#     init_pos = random.choice(reachable_positions_)
+#     c.step(dict(action="Teleport", position=init_pos, agentId=i))
+
+# Minimum spacing distance between agents (meters)
+min_dist = 0.5
+
+def dist2d(p, q):
+    return math.sqrt((p["x"] - q["x"])**2 + (p["z"] - q["z"])**2)
+
+# Keep track of already assigned positions for spacing checks
+chosen_positions = []
+
+# Assign each agent to a valid location separated by at least min_dist meters
+# If no valid location is found, fall back to placing the agent at any reachable position.
+for i in range(no_robot):
+    placed = False
+
+    # Try multiple random samples to find a valid non-colliding spawn location
+    for _ in range(1000):
+        cand = random.choice(reachable_positions_)  # pick a random reachable point
+
+        # Check if cand is at least min_dist away from all previously placed agents
+        if all(dist2d(cand, p) >= min_dist for p in chosen_positions):
+            # Teleport this agent to the chosen valid position
+            c.step(dict(action="Teleport", position=cand, agentId=i))
+            chosen_positions.append(cand)
+            print(f"Agent {i} placed at {cand} (respecting min_dist={min_dist})")
+            placed = True
+            break
+
+    # If no valid position was found that satisfies min_dist, place the agent anyway
+    if not placed:
+        print(f"[WARN] Could not find a valid position for agent {i} with min_dist={min_dist}.")
+        # Fallback: ignore spacing constraint and choose any reachable position
+        fallback_pos = random.choice(reachable_positions_)
+        c.step(dict(action="Teleport", position=fallback_pos, agentId=i))
+        chosen_positions.append(fallback_pos)
+        print(f"Agent {i} forcibly placed at {fallback_pos} (spacing constraint relaxed).")
+
 objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
 # print (objs)
     
@@ -183,6 +302,12 @@ def exec_actions():
 actions_thread = threading.Thread(target=exec_actions)
 actions_thread.start()
 
+def GetRobot(robot_name):
+    for robot in robots:
+        if robot["name"] is robot_name:
+            return robot
+    return None
+
 def GoToObject(robots, dest_obj):
     global recp_id
     
@@ -191,6 +316,10 @@ def GoToObject(robots, dest_obj):
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
+    
+    for robot in robots:
+        task_manager.add_task(robot["name"], "GoToObject")
+
     no_agents = len (robots)
     # robots distance to the goal 
     dist_goals = [10.0] * len(robots)
@@ -292,11 +421,136 @@ def GoToObject(robots, dest_obj):
     print ("Reached: ", dest_obj)
     if dest_obj == "Cabinet" or dest_obj == "Fridge" or dest_obj == "CounterTop":
         recp_id = dest_obj_id
+
+    for robot in robots:
+        task_manager.complete_task(agent_id=robot["name"], task_name="GoToObject", success=True)
+
+
+def GoToPos(robots, dest_position):
+    global recp_id
     
+    # check if robots is a list
+    if not isinstance(robots, list):
+        # convert robot to a list
+        robots = [robots]
+    
+    for robot in robots:
+        task_manager.add_task(robot["name"], "GoToPos")
+
+    no_agents = len (robots)
+    # robots distance to the goal 
+    dist_goals = [10.0] * len(robots)
+    prev_dist_goals = [10.0] * len(robots)
+    count_since_update = [0] * len(robots)
+    clost_node_location = [0] * len(robots)
+    
+    # # list of objects in the scene and their centers
+    # objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
+    # objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
+    # if "|" in dest_obj:
+    #     # obj alredy given
+    #     dest_obj_id = dest_obj
+    #     pos_arr = dest_obj_id.split("|")
+    #     dest_obj_center = {'x': float(pos_arr[1]), 'y': float(pos_arr[2]), 'z': float(pos_arr[3])}
+    # else:
+    #     for idx, obj in enumerate(objs):
+            
+    #         match = re.match(dest_obj, obj)
+    #         if match is not None:
+    #             dest_obj_id = obj
+    #             dest_obj_center = objs_center[idx]
+    #             if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+    #                 break # find the first instance
+        
+    # print ("Going to ", dest_obj_id, dest_obj_center)
+        
+    # dest_obj_pos = [dest_obj_center['x'], dest_obj_center['y'], dest_obj_center['z']] 
+    
+    # closest reachable position for each robot
+    # all robots cannot reach the same spot 
+    # differt close points needs to be found for each robot
+    dest_pos = [dest_position['x'], dest_position['y'], dest_position['z']] 
+    crp = closest_node(dest_pos, reachable_positions, no_agents, clost_node_location)
+    
+    goal_thresh = 0.25
+    # at least one robot is far away from the goal
+    
+    while all(d > goal_thresh for d in dist_goals):
+        for ia, robot in enumerate(robots):
+            robot_name = robot['name']
+            agent_id = int(robot_name[-1]) - 1
+            
+            # get the pose of robot        
+            metadata = c.last_event.events[agent_id].metadata
+            location = {
+                "x": metadata["agent"]["position"]["x"],
+                "y": metadata["agent"]["position"]["y"],
+                "z": metadata["agent"]["position"]["z"],
+                "rotation": metadata["agent"]["rotation"]["y"],
+                "horizon": metadata["agent"]["cameraHorizon"]}
+            
+            prev_dist_goals[ia] = dist_goals[ia] # store the previous distance to goal
+            dist_goals[ia] = distance_pts([location['x'], location['y'], location['z']], crp[ia])
+            
+            dist_del = abs(dist_goals[ia] - prev_dist_goals[ia])
+            # print (ia, "Dist to Goal: ", dist_goals[ia], dist_del, clost_node_location[ia])
+            if dist_del < 0.2:
+                # robot did not move 
+                count_since_update[ia] += 1
+            else:
+                # robot moving 
+                count_since_update[ia] = 0
+                
+            if count_since_update[ia] < 8:
+                action_queue.append({'action':'ObjectNavExpertAction', 'position':dict(x=crp[ia][0], y=crp[ia][1], z=crp[ia][2]), 'agent_id':agent_id})
+            else:    
+                #updating goal
+                clost_node_location[ia] += 1
+                count_since_update[ia] = 0
+                crp = closest_node(dest_pos, reachable_positions, no_agents, clost_node_location)
+    
+            time.sleep(0.5)
+
+    # align the robot once goal is reached
+    # compute angle between robot heading and object
+    metadata = c.last_event.events[agent_id].metadata
+    robot_location = {
+        "x": metadata["agent"]["position"]["x"],
+        "y": metadata["agent"]["position"]["y"],
+        "z": metadata["agent"]["position"]["z"],
+        "rotation": metadata["agent"]["rotation"]["y"],
+        "horizon": metadata["agent"]["cameraHorizon"]}
+    
+    robot_object_vec = [dest_pos[0] -robot_location['x'], dest_pos[2]-robot_location['z']]
+    y_axis = [0, 1]
+    unit_y = y_axis / np.linalg.norm(y_axis)
+    unit_vector = robot_object_vec / np.linalg.norm(robot_object_vec)
+    
+    angle = math.atan2(np.linalg.det([unit_vector,unit_y]),np.dot(unit_vector,unit_y))
+    angle = 360*angle/(2*np.pi)
+    angle = (angle + 360) % 360
+    rot_angle = angle - robot_location['rotation']
+    
+    if rot_angle > 0:
+        action_queue.append({'action':'RotateRight', 'degrees':abs(rot_angle), 'agent_id':agent_id})
+    else:
+        action_queue.append({'action':'RotateLeft', 'degrees':abs(rot_angle), 'agent_id':agent_id})
+        
+    # print ("Reached: ", dest_obj)
+    # if dest_obj == "Cabinet" or dest_obj == "Fridge" or dest_obj == "CounterTop":
+    #     recp_id = dest_obj_id
+
+    for robot in robots:
+        task_manager.complete_task(agent_id=robot["name"], task_name="GoToPos", success=True)
+
 def PickupObject(robots, pick_obj):
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
+       
+    for robot in robots:
+        task_manager.add_task(robot["name"], "PickupObject")
+
     no_agents = len (robots)
     # robots distance to the goal 
     for idx in range(no_agents):
@@ -321,9 +575,13 @@ def PickupObject(robots, pick_obj):
         action_queue.append({'action':'PickupObject', 'objectId':pick_obj_id, 'agent_id':agent_id})
         time.sleep(1)
     
+    for robot in robots:
+        task_manager.complete_task(agent_id=robot["name"], task_name="PickupObject", success=True)
+    
 def PutObject(robot, put_obj, recp):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
+
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
     objs_dists = list([obj["distance"] for obj in c.last_event.metadata["objects"]])
@@ -348,7 +606,9 @@ def PutObject(robot, put_obj, recp):
     # time.sleep(1)
     action_queue.append({'action':'PutObject', 'objectId':recp_obj_id, 'agent_id':agent_id})
     time.sleep(1)
-         
+    
+    task_manager.complete_task(agent_id=robot["name"], task_name="PutObject", success=True)
+
 def SwitchOn(robot, sw_obj):
     print ("Switching On: ", sw_obj)
     robot_name = robot['name']
@@ -384,6 +644,8 @@ def SwitchOff(robot, sw_obj):
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     
+    task_manager.add_task(robot["name"], "SwitchOff")
+
     # turn on all stove burner
     if sw_obj == "StoveKnob":
         for obj in objs:
@@ -404,11 +666,55 @@ def SwitchOff(robot, sw_obj):
         time.sleep(1)
         action_queue.append({'action':'ToggleObjectOff', 'objectId':sw_obj_id, 'agent_id':agent_id})
         time.sleep(1)      
+
+def IsHoldingObject(robot):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    metadata = c.last_event.events[agent_id].metadata
     
+    if len(metadata["inventoryObjects"]) > 0:
+        logging.debug("Holding Item ")
+        print(metadata["inventoryObjects"])
+        return True
+    else:
+        logging.debug("No Holding Item")
+        return False
+    
+def GetHoldingObjects(robot):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    metadata = c.last_event.events[agent_id].metadata
+    
+    if len(metadata["inventoryObjects"]) > 0:
+        logging.debug("Holding Item ")
+        print(metadata["inventoryObjects"])
+        return [obj["objectId"] for obj in metadata["inventoryObjects"]]
+    else:
+        logging.debug("No Holding Item")
+        return []
+
 def OpenObject(robot, sw_obj):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
+    
+    task_manager.add_task(robot["name"], "OpenObject")
+
+    if IsHoldingObject(robot):
+        logging.debug("Robot is holding item")
+        task_manager.debug_print()
+        idle_agents = task_manager.find_idle_agents()
+        print(idle_agents)
+        idle_robot = GetRobot(idle_agents[-1])
+
+        task_manager.complete_task(agent_id=robot["name"], task_name="OpenObject", success=False) 
+
+        StepAside(robot, sw_obj)
+
+        GoToObject(idle_robot, sw_obj)
+        OpenObject(idle_robot, sw_obj)
+        StepAside(idle_robot, sw_obj)
+        return
     
     for obj in objs:
         match = re.match(sw_obj, obj)
@@ -463,12 +769,280 @@ def BreakObject(robot, sw_obj):
     time.sleep(1)
     action_queue.append({'action':'BreakObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
+
+def FindParkingSpot(avoid_targets, min_clearance=1.0):
+    """
+    controller : ai2thor Controller (for this agent)
+    other_agents : list of other agents' positions [{"x", "y", "z"}, ...]
+    min_clearance : minimum distance required from other agents (meters)
+    """
+    logging.debug(f"[Parking] Finding spot avoiding {avoid_targets} with min clearance {min_clearance}")
+    reachable = c.step(action="GetReachablePositions").metadata["actionReturn"]  # [{x,y,z}, ...]
+
+    safe_candidates = []
+    for p in reachable:
+         # Must be at least min_clearance away from all other agents to be considered safe
+        if all(dist2d(p, a) >= min_clearance for a in avoid_targets):
+            safe_candidates.append(p)
+
+    logging.debug(f"[Parking] Found {len(safe_candidates)} safe candidates out of {len(reachable)} reachable positions")
+    if not safe_candidates:
+        print("[Parking] No safe position found with given clearance.")
+        return None
+
+    # For each candidate, compute the minimum distance to other agents
+    # Select the position with the maximum minimum distance → the most spacious area
+    def min_dist_to_others(p):
+        if not avoid_targets:
+            return float("inf")
+        return min(dist2d(p, a) for a in avoid_targets)
+
+    best = max(safe_candidates, key=min_dist_to_others)
+    logging.debug(f"[Parking] Selected position {best} with min distance {min_dist_to_others(best)} to others")
+    return best
+
+def FindLocalParkingSpot(
+    self_pos,
+    other_agents,
+    min_clearance=0.8,
+    max_move_dist=2.0
+):
+    """
+    controller   : ai2thor Controller (for this agent)
+    self_pos     : current position of this agent {"x", "y", "z"}
+    other_agents : list of other agents' positions [{"x", "y", "z"}, ...]
+    min_clearance: minimum distance from other agents to be considered safe (meters)
+    max_move_dist: maximum allowed move distance from self_pos (meters)
+    """
+    #reachable = c.step(action="GetReachablePositions").metadata["actionReturn"]  # [{x,y,z}, ...]
+    reachable = reachable_positions_
+
+    local_candidates = []
+    for p in reachable:
+        # Only consider positions within max_move_dist from current position
+        if dist2d(p, self_pos) > max_move_dist:
+            continue
+
+        # Must be at least min_clearance away from all other agents
+        if not all(dist2d(p, a) >= min_clearance for a in other_agents):
+            continue
+
+        local_candidates.append(p)
+
+    if not local_candidates:
+        print("[Parking] No local safe position found within max_move_dist.")
+        return None
+
+    # For each candidate:
+    #   1) maximize the minimum distance to other agents (more clearance)
+    #   2) among those, prefer positions closer to current position
+    def score(p):
+        if not other_agents:
+            min_d_to_others = float("inf")
+        else:
+            min_d_to_others = min(dist2d(p, a) for a in other_agents)
+
+        d_from_self = dist2d(p, self_pos)
+        # We want:
+        #   - larger min_d_to_others (good)
+        #   - smaller d_from_self (good)
+        # So we return a tuple that sorts as:
+        #   (clearance first, then negative distance to self)
+        return (min_d_to_others, -d_from_self)
+
+    best = max(local_candidates, key=score)
+    return best
+
+def StepAside(robot, sw_obj):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
     
+    task_manager.add_task(robot["name"], "StepAside")
+
+    objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
+    objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
+
+    avoid_targets = []
+    if "|" in sw_obj:
+        # obj alredy given
+        dest_obj_id = sw_obj
+        pos_arr = dest_obj_id.split("|")
+        dest_obj_center = {'x': float(pos_arr[1]), 'y': float(pos_arr[2]), 'z': float(pos_arr[3])}
+    else:
+        for idx, obj in enumerate(objs):
+            match = re.match(sw_obj, obj)
+            if match is not None:
+                dest_obj_id = obj
+                dest_obj_center = objs_center[idx]
+                if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+                    break # find the first instance
+    
+    avoid_targets.append(dest_obj_center)
+    self_pos = None
+    for i, agent in enumerate(c.last_event.events):
+        if i != agent_id: 
+            avoid_targets.append(agent.metadata['agent']['position'])
+        else:
+            self_pos = agent.metadata['agent']['position']
+            print("curr position", agent.metadata['agent']['position'])
+        
+    parking_spot = FindLocalParkingSpot(self_pos, avoid_targets, min_clearance=1.0, max_move_dist=1.5)
+    print("parking_spot ", parking_spot)
+
+    GoToPos([robot], parking_spot)
+    # time.sleep(1)
+    # action_queue.append({'action':'ObjectNavExpertAction', 'position':dict(x=parking_spot['x'], y=parking_spot['y'], z=parking_spot['z']), 'agent_id':agent_id})
+    # time.sleep(1)
+    task_manager.complete_task(agent_id=robot["name"], task_name="StepAside", success=True)
+
+import math
+
+def IsObstacleInFront(robot, max_dist=0.7, width=0.4):
+    """
+    event      : ai2thor Event (returned by controller.step)
+    max_dist   : forward distance threshold to consider an object as an obstacle (meters)
+    width      : half-width of the "front corridor" to check left/right side distance (meters)
+
+    Returns: (has_obstacle: bool, obstacle_obj: dict or None)
+    """
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+
+    event = c.last_event.events[agent_id]
+    agent = event.metadata["agent"]
+    agent_pos = agent["position"]    # {"x", "y", "z"}
+    agent_rot = agent["rotation"]    # {"x", "y", "z"}
+
+    # Unity/AI2-THOR: yaw is rotation around Y axis
+    yaw = math.radians(agent_rot["y"])
+    forward = {
+        "x": math.sin(yaw),
+        "z": math.cos(yaw),
+    }
+
+    def dot2d(a, b):
+        return a["x"] * b["x"] + a["z"] * b["z"]
+
+    def sub2d(a, b):
+        return {"x": a["x"] - b["x"], "z": a["z"] - b["z"]}
+
+    objects = event.metadata["objects"]
+
+    nearest_obj = None
+    nearest_dist = float("inf")
+
+    holding_objects = GetHoldingObjects(robot)
+
+    for obj in objects:
+        # Optionally filter objects by visibility or type:
+        if not obj["visible"]:
+            continue
+
+        if obj["objectId"] in holding_objects:
+            continue
+
+        if obj["moveable"] is False and obj["pickupable"] is False:
+            continue
+
+        pos = obj["position"]
+        rel = sub2d(pos, agent_pos)
+
+        # # Project object onto the agent's forward vector to check if it's in front
+        # dist_forward = dot2d(rel, forward)
+
+        # # Skip objects behind the agent
+        # if dist_forward <= 0:
+        #     continue
+
+        # # Skip objects too far ahead
+        # if dist_forward > max_dist:
+        #     continue
+
+        # # Compute side distance (distance perpendicular to forward direction)
+        # proj = {"x": forward["x"] * dist_forward, "z": forward["z"] * dist_forward}
+        # side_vec = sub2d(rel, proj)
+        # side_dist = math.sqrt(side_vec["x"]**2 + side_vec["z"]**2)
+
+        # # Skip objects that are too far off to the left/right
+        # if side_dist > width:
+        #     continue
+
+        # Candidate obstacle found — select the nearest one
+        dist = math.sqrt(rel["x"]**2 + rel["z"]**2)
+        if dist < nearest_dist:
+            nearest_dist = dist
+            nearest_obj = obj
+
+    if nearest_obj is not None:
+        return True, nearest_obj
+    else:
+        return False, None
+    
+
+def PullObject(robot, pull_obj, move_magnitude=0.5):
+    """
+    robots      : single robot dict or list of robot dicts (same format as PickupObject)
+    pull_obj    : regex pattern for the objectId to pull (e.g., r"Chair")
+    move_magnitude : how far to pull the object toward the agent in a single action (meters)
+    """
+    print("Pulling:", pull_obj)
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1  # assumes names like 'agent1', 'agent2', ...
+
+    # List of objects in the scene and their centers
+    objs = [obj["objectId"] for obj in c.last_event.metadata["objects"]]
+    objs_center = [obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]]
+
+    pull_obj_id = None
+    dest_obj_center = None
+
+    for i, obj in enumerate(objs):
+        match = re.match(pull_obj, obj)
+        if match is not None:
+            pull_obj_id = obj
+            dest_obj_center = objs_center[i]
+            if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+                # Use the first valid instance we find
+                break
+
+    if pull_obj_id is None:
+        print(f"[PullObject] No object matched pattern: {pull_obj}")
+        return
+
+    print("Pulling object", pull_obj_id, "at", dest_obj_center)
+
+    # Enqueue a PullObject action toward the agent
+    action_queue.append({
+        'action': 'PullObject',
+        'objectId': pull_obj_id,
+        'agent_id': agent_id,
+        'moveMagnitude': move_magnitude
+    })
+
+    time.sleep(1)
+
 def SliceObject(robot, sw_obj):
     print ("Slicing: ", sw_obj)
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
+    
+    task_manager.add_task(robot["name"], "SliceObject")
+
+    def IsHoldingKnife(robot):
+        holding_objects = GetHoldingObjects(robot)
+        for obj_id in holding_objects:
+            if re.match(r"Knife", obj_id):
+                return True
+        return False
+    
+    if not IsHoldingKnife(robot):
+        print("Robot is not holding a knife. Cannot slice object.")
+        time.sleep(0.5)
+        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':False})
+        time.sleep(0.5)
+        task_manager.complete_task(agent_id=robot["name"], task_name="SliceObject", success=False)
+        return
     
     for obj in objs:
         match = re.match(sw_obj, obj)
@@ -476,9 +1050,77 @@ def SliceObject(robot, sw_obj):
             sw_obj_id = obj
             break # find the first instance
     GoToObject(robot, sw_obj_id)
-    time.sleep(1)
-    action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id})      
-    time.sleep(1)
+
+    metadata = c.last_event.events[agent_id].metadata
+    self_pos = metadata["agent"]["position"]
+    # for i, agent in enumerate(c.last_event.events):
+    #     if i != agent_id: 
+    #         avoid_targets.append(agent.metadata['agent']['position'])
+    #     else:
+    #         self_pos = agent.metadata['agent']['position']
+    #         print("curr position", agent.metadata['agent']['position'])
+        # list of objects in the scene and their centers
+    dest_obj = sw_obj
+    objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
+    objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
+    if "|" in dest_obj:
+        # obj alredy given
+        dest_obj_id = dest_obj
+        pos_arr = dest_obj_id.split("|")
+        dest_obj_center = {'x': float(pos_arr[1]), 'y': float(pos_arr[2]), 'z': float(pos_arr[3])}
+    else:
+        for idx, obj in enumerate(objs):
+            
+            match = re.match(dest_obj, obj)
+            if match is not None:
+                dest_obj_id = obj
+                dest_obj_center = objs_center[idx]
+                if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+                    break # find the first instance
+    dist2obj = dist2d(self_pos, dest_obj_center)
+    print(self_pos, dest_obj_center, dist2d(self_pos, dest_obj_center))
+
+    count = 0
+    while dist2obj > 0.6 and count < 2:
+        print("Too far to slice the object.")
+        
+        is_obstacle, obstacle_obj = IsObstacleInFront(robot, max_dist=0.5)
+        if is_obstacle:
+            idle_agents = task_manager.find_idle_agents()
+            idle_robot = GetRobot(idle_agents[-1])
+            if not idle_agents:
+                print("No idle agents.")
+                return    
+
+            StepAside(robot, sw_obj)
+
+            obstacle_obj_id = obstacle_obj["objectId"].split("|")[0]
+            print("Obstacle detected in front:", obstacle_obj_id)
+            GoToObject(idle_robot, obstacle_obj_id)
+            PickupObject(idle_robot, obstacle_obj_id)
+            #PullObject(idle_robot, obstacle_obj_id, move_magnitude=200)
+            StepAside(idle_robot, obstacle_obj_id)
+            ThrowObject(idle_robot, obstacle_obj_id)
+
+        GoToObject(robot, sw_obj)
+        metadata = c.last_event.events[agent_id].metadata
+        self_pos = metadata["agent"]["position"]
+        dist2obj = dist2d(self_pos, dest_obj_center)
+        count += 1
+    
+    if dist2obj <= 0.9:
+        print("Close enough to slice the object.")
+        time.sleep(1)
+        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':True})      
+        time.sleep(1)
+        task_manager.complete_task(agent_id=robot["name"], task_name="CloseObject", success=True) 
+    else:
+        print("Failed to get close enough to slice the object.")
+        time.sleep(1)
+        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':False})
+        time.sleep(1)
+        task_manager.complete_task(agent_id=robot["name"], task_name="CloseObject", success=False)
+    return
     
 def CleanObject(robot, sw_obj):
     robot_name = robot['name']
@@ -508,3 +1150,106 @@ def ThrowObject(robot, sw_obj):
     
     action_queue.append({'action':'ThrowObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
+
+### TASK - START ###
+no_trans = 0
+### TASK - END ###
+
+for i in range(25):
+    action_queue.append({'action':'Done'})
+    action_queue.append({'action':'Done'})
+    action_queue.append({'action':'Done'})
+    time.sleep(0.1)
+
+task_over = True
+time.sleep(5)
+
+if total_exec != 0:
+    exec = float(success_exec) / float(total_exec)
+else:
+    exec = 0.0
+
+print (ground_truth)
+objs = list([obj for obj in c.last_event.metadata["objects"]])
+
+gcr_tasks = 0.0
+gcr_complete = 0.0
+for obj_gt in ground_truth:
+    obj_name = obj_gt['name']
+    state = obj_gt['state']
+    contains = obj_gt['contains']
+    gcr_tasks += 1
+    for obj in objs:
+        # if obj_name in obj["name"]:
+        #     print (obj)
+        if state == 'SLICED':
+            if obj_name in obj["name"] and obj["isSliced"]:
+                gcr_complete += 1 
+                
+        if state == 'OFF':
+            if obj_name in obj["name"] and not obj["isToggled"]:
+                gcr_complete += 1 
+        
+        if state == 'ON':
+            if obj_name in obj["name"] and obj["isToggled"]:
+                gcr_complete += 1 
+        
+        if state == 'HOT':
+            # print (obj)
+            if obj_name in obj["name"] and obj["temperature"] == 'Hot':
+                gcr_complete += 1 
+                
+        if state == 'COOKED':
+            if obj_name in obj["name"] and obj["isCooked"]:
+                gcr_complete += 1 
+                
+        if state == 'OPENED':
+            if obj_name in obj["name"] and obj["isOpen"]:
+                gcr_complete += 1 
+                
+        if state == 'CLOSED':
+            if obj_name in obj["name"] and not obj["isOpen"]:
+                gcr_complete += 1 
+                
+        if state == 'PICKED':
+            if obj_name in obj["name"] and obj["isPickedUp"]:
+                gcr_complete += 1 
+        
+        if len(contains) != 0 and obj_name in obj["name"]:
+            print (contains, obj_name, obj["name"])   
+            for rec in contains:
+                if obj['receptacleObjectIds'] is not None:
+                    for r in obj['receptacleObjectIds']:
+                        print (rec, r)
+                        if rec in r:
+                            print (rec, r)
+                            gcr_complete += 1 
+                    
+            
+             
+sr = 0
+tc = 0
+if gcr_tasks == 0:
+    gcr = 1
+else:
+    gcr = gcr_complete / gcr_tasks
+
+if gcr == 1.0:
+    tc = 1 
+    
+max_trans += 1
+no_trans_gt += 1
+print (no_trans_gt, max_trans, no_trans)
+if max_trans == no_trans_gt and no_trans_gt == no_trans:
+    ru = 1
+elif max_trans == no_trans_gt:
+    ru = 0
+else:
+    ru =  (max_trans - no_trans) / (max_trans - no_trans_gt)
+
+if tc == 1 and ru == 1:
+    sr = 1
+
+print (f"SR:{sr}, TC:{tc}, GCR:{gcr}, Exec:{exec}, RU:{ru}")
+
+generate_video()
