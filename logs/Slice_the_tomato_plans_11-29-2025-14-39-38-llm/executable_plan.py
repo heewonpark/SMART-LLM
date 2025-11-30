@@ -13,14 +13,15 @@ from collections import deque
 import random
 import os
 from glob import glob
+from task_manager import TaskManager
+
+
 import logging
 from pprint import pprint
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d (%(funcName)s) - %(message)s')
 
-from task_manager import TaskManager
 task_manager = TaskManager()
-
 def closest_node(node, nodes, no_robot, clost_node_location):
     crps = []
     distances = distance.cdist([node], nodes)[0]
@@ -48,50 +49,106 @@ def generate_video():
                                 '-pix_fmt', 'yuv420p',
                                 '{}/video_{}.mp4'.format(os.path.dirname(__file__), view)]
             subprocess.call(command_set)
+        
 
-### LOG - START ###
-robots = []
-floor_no = 1
-ground_truth = []
-no_trans_gt = 0
-max_trans = 0
-set_agents = []
-set_objects = []
-total_exec = 1
-success_exec = 0
-### LOG - END ###
 
+
+
+
+robots = [{'name': 'robot1', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot2', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}, {'name': 'robot3', 'skills': ['GoToObject', 'OpenObject', 'CloseObject', 'BreakObject', 'SliceObject', 'SwitchOn', 'SwitchOff', 'PickupObject', 'PutObject', 'DropHandObject', 'ThrowObject', 'PushObject', 'PullObject'], 'mass': 100}]
 for robot in robots:
     task_manager.register_agent(robot["name"])
+
+floor_no = 6
+
+
+ground_truth = [{'name': 'Tomato', 'contains': [], 'state': 'SLICED'}]
+no_trans_gt = 0
+max_trans = 0
+
+set_agents = []
+
+set_objects = [{'name': 'Chair', 'position': [1.0, 0.0, 2.0]}]
+
 
 total_exec = 0
 success_exec = 0
 
-c = Controller( height=1000, width=1000)
+c = Controller( height=1000, width=1000, visibilityDistance=0.3)
 c.reset("FloorPlan" + str(floor_no)) 
 no_robot = len(robots)
 
 # initialize n agents into the scene
 multi_agent_event = c.step(dict(action='Initialize', agentMode="default", snapGrid=False, gridSize=0.5, rotateStepDegrees=20, visibilityDistance=100, fieldOfView=90, agentCount=no_robot))
 
-for object_ in set_objects:
-    obj_name = object_["name"]
-    obj_pos = object_["position"]
-    objs = [obj for obj in c.last_event.metadata["objects"]
-              if obj["objectType"] == obj_name]
+# if set_objects:
+#     #if new_object in set_objects:
+       
+#     c.step(action='SetObjectPoses', objectPoses=[{"objectName": "Chair", "position": {"x": 1.0, "y": 0.0, "z": 2.0}}])
 
-    print(len(objs), f" {obj_name} found")
+# c.step(
+#     action="CreateObject",
+#     objectType="Chair",
+#     position=dict(x=1.0, y=0.0, z=-0.8),
+#     rotation=dict(x=0, y=0, z=0)
+# )
 
-    obj_id = objs[0]["objectId"]
+# stools = [obj for obj in c.last_event.metadata["objects"]
+#           if obj["objectType"] == "Stool"]
 
-    # 새 위치로 텔레포트
-    c.step(
-        action="TeleportObject",
-        objectId=obj_id,
-        position=dict(x=obj_pos[0], y=obj_pos[1], z=obj_pos[2]),
-        rotation=dict(x=0, y=0, z=0),
-        forceAction=True
-    )
+# print(len(stools), " stools found")
+
+# stool_id = stools[0]["objectId"]
+
+# # 새 위치로 텔레포트
+# c.step(
+#     action="TeleportObject",
+#     objectId=stool_id,
+#     position=dict(x=1.0, y=0.0, z=-0.80),
+#     rotation=dict(x=0, y=0, z=0),
+#     forceAction=True
+# )
+
+# stool_id = stools[1]["objectId"]
+# c.step(
+#     action="TeleportObject",
+#     objectId=stool_id,
+#     position=dict(x=0.80, y=0.0, z=-1.0),
+#     rotation=dict(x=0, y=0, z=0),
+#     forceAction=True
+# )
+
+
+objs = [obj for obj in c.last_event.metadata["objects"]
+          if obj["objectType"] == "Pan"]
+
+print(len(objs), " Pan found")
+
+obj_id = objs[0]["objectId"]
+
+# 새 위치로 텔레포트
+c.step(
+    action="TeleportObject",
+    objectId=obj_id,
+    position=dict(x=1.0, y=0.0, z=-0.80),
+    rotation=dict(x=0, y=0, z=0),
+    forceAction=True
+)
+
+plates = [obj for obj in c.last_event.metadata["objects"]
+          if obj["objectType"] == "Plate"]
+
+print(len(plates), " plates found")
+
+plate_id = plates[0]["objectId"]
+
+c.step(
+    action="TeleportObject",
+    objectId=plate_id,
+    position=dict(x=0.80, y=0.0, z=-1.0),
+    rotation=dict(x=0, y=0, z=0),
+    forceAction=True
+)
 
 # add a top view camera
 event = c.step(action="GetMapViewCameraProperties")
@@ -101,47 +158,11 @@ event = c.step(action="AddThirdPartyCamera", **event.metadata["actionReturn"])
 reachable_positions_ = c.step(action="GetReachablePositions").metadata["actionReturn"]
 reachable_positions = positions_tuple = [(p["x"], p["y"], p["z"]) for p in reachable_positions_]
 
-# # randomize postions of the agents
-# for i in range (no_robot):
-#     init_pos = random.choice(reachable_positions_)
-#     c.step(dict(action="Teleport", position=init_pos, agentId=i))
-
-# Minimum spacing distance between agents (meters)
-min_dist = 0.5
-
-def dist2d(p, q):
-    return math.sqrt((p["x"] - q["x"])**2 + (p["z"] - q["z"])**2)
-
-# Keep track of already assigned positions for spacing checks
-chosen_positions = []
-
-# Assign each agent to a valid location separated by at least min_dist meters
-# If no valid location is found, fall back to placing the agent at any reachable position.
-for i in range(no_robot):
-    placed = False
-
-    # Try multiple random samples to find a valid non-colliding spawn location
-    for _ in range(1000):
-        cand = random.choice(reachable_positions_)  # pick a random reachable point
-
-        # Check if cand is at least min_dist away from all previously placed agents
-        if all(dist2d(cand, p) >= min_dist for p in chosen_positions):
-            # Teleport this agent to the chosen valid position
-            c.step(dict(action="Teleport", position=cand, agentId=i))
-            chosen_positions.append(cand)
-            print(f"Agent {i} placed at {cand} (respecting min_dist={min_dist})")
-            placed = True
-            break
-
-    # If no valid position was found that satisfies min_dist, place the agent anyway
-    if not placed:
-        print(f"[WARN] Could not find a valid position for agent {i} with min_dist={min_dist}.")
-        # Fallback: ignore spacing constraint and choose any reachable position
-        fallback_pos = random.choice(reachable_positions_)
-        c.step(dict(action="Teleport", position=fallback_pos, agentId=i))
-        chosen_positions.append(fallback_pos)
-        print(f"Agent {i} forcibly placed at {fallback_pos} (spacing constraint relaxed).")
-
+# randomize postions of the agents
+for i in range (no_robot):
+    init_pos = random.choice(reachable_positions_)
+    c.step(dict(action="Teleport", position=init_pos, agentId=i))
+    
 objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
 # print (objs)
     
@@ -255,7 +276,11 @@ def exec_actions():
                         
                 elif act['action'] == 'SliceObject':
                     total_exec += 1
-                    multi_agent_event = c.step(action="SliceObject", objectId=act['objectId'], agentId=act['agent_id'], forceAction=True)
+                    multi_agent_event = c.step(action="SliceObject", objectId=act['objectId'], agentId=act['agent_id'], forceAction=False)
+                    if event.metadata["lastActionSuccess"]:
+                        print("SliceObject succeeded!")
+                    else:
+                        print("SliceObject failed:", event.metadata.get("SliceObject"))
                     if multi_agent_event.metadata['errorMessage'] != "":
                         print (multi_agent_event.metadata['errorMessage'])
                     else:
@@ -272,6 +297,13 @@ def exec_actions():
                 elif act['action'] == 'BreakObject':
                     total_exec += 1
                     multi_agent_event = c.step(action="BreakObject", objectId=act['objectId'], agentId=act['agent_id'], forceAction=True)
+                    if multi_agent_event.metadata['errorMessage'] != "":
+                        print (multi_agent_event.metadata['errorMessage'])
+                    else:
+                        success_exec += 1
+                elif act['action'] == 'PullObject':
+                    total_exec += 1
+                    multi_agent_event = c.step(action="PullObject", objectId=act['objectId'], agentId=act['agent_id'], moveMagnitude=act['moveMagnitude'], forceAction=True)
                     if multi_agent_event.metadata['errorMessage'] != "":
                         print (multi_agent_event.metadata['errorMessage'])
                     else:
@@ -316,10 +348,6 @@ def GoToObject(robots, dest_obj):
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
-    
-    for robot in robots:
-        task_manager.add_task(robot["name"], "GoToObject")
-
     no_agents = len (robots)
     # robots distance to the goal 
     dist_goals = [10.0] * len(robots)
@@ -421,10 +449,6 @@ def GoToObject(robots, dest_obj):
     print ("Reached: ", dest_obj)
     if dest_obj == "Cabinet" or dest_obj == "Fridge" or dest_obj == "CounterTop":
         recp_id = dest_obj_id
-
-    for robot in robots:
-        task_manager.complete_task(agent_id=robot["name"], task_name="GoToObject", success=True)
-
 
 def GoToPos(robots, dest_position):
     global recp_id
@@ -547,10 +571,6 @@ def PickupObject(robots, pick_obj):
     if not isinstance(robots, list):
         # convert robot to a list
         robots = [robots]
-       
-    for robot in robots:
-        task_manager.add_task(robot["name"], "PickupObject")
-
     no_agents = len (robots)
     # robots distance to the goal 
     for idx in range(no_agents):
@@ -575,13 +595,9 @@ def PickupObject(robots, pick_obj):
         action_queue.append({'action':'PickupObject', 'objectId':pick_obj_id, 'agent_id':agent_id})
         time.sleep(1)
     
-    for robot in robots:
-        task_manager.complete_task(agent_id=robot["name"], task_name="PickupObject", success=True)
-    
 def PutObject(robot, put_obj, recp):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
-
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
     objs_dists = list([obj["distance"] for obj in c.last_event.metadata["objects"]])
@@ -606,9 +622,7 @@ def PutObject(robot, put_obj, recp):
     # time.sleep(1)
     action_queue.append({'action':'PutObject', 'objectId':recp_obj_id, 'agent_id':agent_id})
     time.sleep(1)
-    
-    task_manager.complete_task(agent_id=robot["name"], task_name="PutObject", success=True)
-
+         
 def SwitchOn(robot, sw_obj):
     print ("Switching On: ", sw_obj)
     robot_name = robot['name']
@@ -644,8 +658,6 @@ def SwitchOff(robot, sw_obj):
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
     
-    task_manager.add_task(robot["name"], "SwitchOff")
-
     # turn on all stove burner
     if sw_obj == "StoveKnob":
         for obj in objs:
@@ -666,55 +678,11 @@ def SwitchOff(robot, sw_obj):
         time.sleep(1)
         action_queue.append({'action':'ToggleObjectOff', 'objectId':sw_obj_id, 'agent_id':agent_id})
         time.sleep(1)      
-
-def IsHoldingObject(robot):
-    robot_name = robot['name']
-    agent_id = int(robot_name[-1]) - 1
-    metadata = c.last_event.events[agent_id].metadata
     
-    if len(metadata["inventoryObjects"]) > 0:
-        logging.debug("Holding Item ")
-        print(metadata["inventoryObjects"])
-        return True
-    else:
-        logging.debug("No Holding Item")
-        return False
-    
-def GetHoldingObjects(robot):
-    robot_name = robot['name']
-    agent_id = int(robot_name[-1]) - 1
-    metadata = c.last_event.events[agent_id].metadata
-    
-    if len(metadata["inventoryObjects"]) > 0:
-        logging.debug("Holding Item ")
-        print(metadata["inventoryObjects"])
-        return [obj["objectId"] for obj in metadata["inventoryObjects"]]
-    else:
-        logging.debug("No Holding Item")
-        return []
-
 def OpenObject(robot, sw_obj):
     robot_name = robot['name']
     agent_id = int(robot_name[-1]) - 1
     objs = list(set([obj["objectId"] for obj in c.last_event.metadata["objects"]]))
-    
-    task_manager.add_task(robot["name"], "OpenObject")
-
-    if IsHoldingObject(robot):
-        logging.debug("Robot is holding item")
-        task_manager.debug_print()
-        idle_agents = task_manager.find_idle_agents()
-        print(idle_agents)
-        idle_robot = GetRobot(idle_agents[-1])
-
-        task_manager.complete_task(agent_id=robot["name"], task_name="OpenObject", success=False) 
-
-        StepAside(robot, sw_obj)
-        
-        GoToObject(idle_robot, sw_obj)
-        OpenObject(idle_robot, sw_obj)
-        StepAside(idle_robot, sw_obj)
-        return
     
     for obj in objs:
         match = re.match(sw_obj, obj)
@@ -769,6 +737,35 @@ def BreakObject(robot, sw_obj):
     time.sleep(1)
     action_queue.append({'action':'BreakObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
+
+def IsHoldingObjects(robot):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    metadata = c.last_event.events[agent_id].metadata
+    
+    if len(metadata["inventoryObjects"]) > 0:
+        logging.debug("Holding Item ")
+        print(metadata["inventoryObjects"])
+        return True
+    else:
+        logging.debug("No Holding Item")
+        return False
+    
+def GetHoldingObjects(robot):
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+    metadata = c.last_event.events[agent_id].metadata
+    
+    if len(metadata["inventoryObjects"]) > 0:
+        logging.debug("Holding Item ")
+        print(metadata["inventoryObjects"])
+        return [obj["objectId"] for obj in metadata["inventoryObjects"]]
+    else:
+        logging.debug("No Holding Item")
+        return []
+
+def dist2d(p, q):
+    return math.sqrt((p["x"] - q["x"])**2 + (p["z"] - q["z"])**2)
 
 def FindParkingSpot(avoid_targets, min_clearance=1.0):
     """
@@ -977,6 +974,86 @@ def IsObstacleInFront(robot, max_dist=0.7, width=0.4):
         return True, nearest_obj
     else:
         return False, None
+
+
+def GetObstacles(robot, max_dist=0.7, width=0.4):
+    """
+    event      : ai2thor Event (returned by controller.step)
+    max_dist   : forward distance threshold to consider an object as an obstacle (meters)
+    width      : half-width of the "front corridor" to check left/right side distance (meters)
+
+    Returns: (has_obstacle: bool, obstacle_obj: dict or None)
+    """
+    robot_name = robot['name']
+    agent_id = int(robot_name[-1]) - 1
+
+    event = c.last_event.events[agent_id]
+    agent = event.metadata["agent"]
+    agent_pos = agent["position"]    # {"x", "y", "z"}
+    agent_rot = agent["rotation"]    # {"x", "y", "z"}
+
+    # Unity/AI2-THOR: yaw is rotation around Y axis
+    yaw = math.radians(agent_rot["y"])
+    forward = {
+        "x": math.sin(yaw),
+        "z": math.cos(yaw),
+    }
+
+    def dot2d(a, b):
+        return a["x"] * b["x"] + a["z"] * b["z"]
+
+    def sub2d(a, b):
+        return {"x": a["x"] - b["x"], "z": a["z"] - b["z"]}
+
+    objects = event.metadata["objects"]
+
+    nearby_objs = []
+    #nearest_dist = float("inf")
+    nearby_dists = []
+
+    holding_objects = GetHoldingObjects(robot)
+
+    for obj in objects:
+        # Optionally filter objects by visibility or type:
+        if not obj["visible"]:
+            continue
+
+        if obj["objectId"] in holding_objects:
+            continue
+
+        if obj["moveable"] is False and obj["pickupable"] is False:
+            continue
+
+        pos = obj["position"]
+        rel = sub2d(pos, agent_pos)
+
+        # # Project object onto the agent's forward vector to check if it's in front
+        # dist_forward = dot2d(rel, forward)
+
+        # # Skip objects behind the agent
+        # if dist_forward <= 0:
+        #     continue
+
+        # # Skip objects too far ahead
+        # if dist_forward > max_dist:
+        #     continue
+
+        # # Compute side distance (distance perpendicular to forward direction)
+        # proj = {"x": forward["x"] * dist_forward, "z": forward["z"] * dist_forward}
+        # side_vec = sub2d(rel, proj)
+        # side_dist = math.sqrt(side_vec["x"]**2 + side_vec["z"]**2)
+
+        # # Skip objects that are too far off to the left/right
+        # if side_dist > width:
+        #     continue
+
+        # Candidate obstacle found — select the nearest one
+        dist = math.sqrt(rel["x"]**2 + rel["z"]**2)
+        if dist < max_dist:
+            nearby_objs.append(obj)
+            nearby_dists.append(dist)
+
+    return nearby_objs, nearby_dists
     
 
 def PullObject(robot, pull_obj, move_magnitude=0.5):
@@ -1021,6 +1098,10 @@ def PullObject(robot, pull_obj, move_magnitude=0.5):
 
     time.sleep(1)
 
+#replan = {"plan":[{"cmd":"PickupObject","robot":"robot2","object":"Pan","receptacle":""},{"cmd":"PutObject","robot":"robot2","object":"Pan","receptacle":"CounterTop"},{"cmd":"PickupObject","robot":"robot3","object":"Plate","receptacle":""},{"cmd":"PutObject","robot":"robot3","object":"Plate","receptacle":"CounterTop"}]}
+replan = {"plan":[{"cmd":"GoToObject","robot":"robot2","object":"Pan","receptacle":""},{"cmd":"PickupObject","robot":"robot2","object":"Pan","receptacle":""},{"cmd":"GoToObject","robot":"robot2","object":"CounterTop","receptacle":""},{"cmd":"PutObject","robot":"robot2","object":"Pan","receptacle":"CounterTop"},{"cmd":"GoToObject","robot":"robot3","object":"Plate","receptacle":""},{"cmd":"PickupObject","robot":"robot3","object":"Plate","receptacle":""},{"cmd":"GoToObject","robot":"robot3","object":"CounterTop","receptacle":""},{"cmd":"PutObject","robot":"robot3","object":"Plate","receptacle":"CounterTop"}]}
+use_replan = True
+
 def SliceObject(robot, sw_obj):
     print ("Slicing: ", sw_obj)
     robot_name = robot['name']
@@ -1029,21 +1110,6 @@ def SliceObject(robot, sw_obj):
     
     task_manager.add_task(robot["name"], "SliceObject")
 
-    def IsHoldingKnife(robot):
-        holding_objects = GetHoldingObjects(robot)
-        for obj_id in holding_objects:
-            if re.match(r"Knife", obj_id):
-                return True
-        return False
-    
-    if not IsHoldingKnife(robot):
-        print("Robot is not holding a knife. Cannot slice object.")
-        time.sleep(0.5)
-        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':False})
-        time.sleep(0.5)
-        task_manager.complete_task(agent_id=robot["name"], task_name="SliceObject", success=False)
-        return
-    
     for obj in objs:
         match = re.match(sw_obj, obj)
         if match is not None:
@@ -1081,11 +1147,12 @@ def SliceObject(robot, sw_obj):
     print(self_pos, dest_obj_center, dist2d(self_pos, dest_obj_center))
 
     count = 0
-    while dist2obj > 0.6 and count < 2:
+    while dist2obj > 0.6 and count < 1:
         print("Too far to slice the object.")
         
-        is_obstacle, obstacle_obj = IsObstacleInFront(robot, max_dist=0.5)
-        if is_obstacle:
+        #is_obstacle, obstacle_obj = IsObstacleInFront(robot, max_dist=0.5)
+        nearby_objs, nearby_dists = GetObstacles(robot, max_dist=0.5)
+        if len(nearby_objs) > 0:
             idle_agents = task_manager.find_idle_agents()
             idle_robot = GetRobot(idle_agents[-1])
             if not idle_agents:
@@ -1094,13 +1161,33 @@ def SliceObject(robot, sw_obj):
 
             StepAside(robot, sw_obj)
 
-            obstacle_obj_id = obstacle_obj["objectId"].split("|")[0]
-            print("Obstacle detected in front:", obstacle_obj_id)
-            GoToObject(idle_robot, obstacle_obj_id)
-            PickupObject(idle_robot, obstacle_obj_id)
-            #PullObject(idle_robot, obstacle_obj_id, move_magnitude=200)
-            StepAside(idle_robot, obstacle_obj_id)
-            ThrowObject(idle_robot, obstacle_obj_id)
+            if use_replan:
+                # replan logic
+                print("Replanning to avoid obstacle...")
+                for step in replan["plan"]:
+                    cmd = step["cmd"]
+                    rob_name = step["robot"]
+                    obj_name = step["object"]
+                    receptacle = step["receptacle"]
+                    rob = GetRobot(rob_name)
+                    if cmd == "GoToObject":
+                        GoToObject(rob, obj_name)
+                    elif cmd == "PickupObject":
+                        PickupObject(rob, obj_name)
+                    elif cmd == "PutObject":
+                        PutObject(rob, obj_name, receptacle)
+                    time.sleep(1)
+                print("Replan completed.")
+
+            else:
+                for idx, obstacle_obj in enumerate(nearby_objs):
+                    obstacle_obj_id = obstacle_obj["objectId"].split("|")[0]
+                    print("Obstacle detected in front:", obstacle_obj_id)
+                    GoToObject(idle_robot, obstacle_obj_id)
+                    PickupObject(idle_robot, obstacle_obj_id)
+                    #PullObject(idle_robot, obstacle_obj_id, move_magnitude=200)
+                    StepAside(idle_robot, obstacle_obj_id)
+                    ThrowObject(idle_robot, obstacle_obj_id)
 
         GoToObject(robot, sw_obj)
         metadata = c.last_event.events[agent_id].metadata
@@ -1111,14 +1198,11 @@ def SliceObject(robot, sw_obj):
     if dist2obj <= 0.9:
         print("Close enough to slice the object.")
         time.sleep(1)
-        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':True})      
+        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id})      
         time.sleep(1)
         task_manager.complete_task(agent_id=robot["name"], task_name="CloseObject", success=True) 
     else:
         print("Failed to get close enough to slice the object.")
-        time.sleep(1)
-        action_queue.append({'action':'SliceObject', 'objectId':sw_obj_id, 'agent_id':agent_id, 'success':False})
-        time.sleep(1)
         task_manager.complete_task(agent_id=robot["name"], task_name="CloseObject", success=False)
     return
     
@@ -1151,6 +1235,7 @@ def ThrowObject(robot, sw_obj):
     action_queue.append({'action':'ThrowObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
 
+
 func_map = {
     "GoToObject": GoToObject,
     "OpenObject": OpenObject,
@@ -1168,9 +1253,27 @@ func_map = {
     "PullObject": PullObject
 }
 
-### TASK - START ###
-no_trans = 0
-### TASK - END ###
+def slice_tomato(robot_list):
+    # robot_list = [robot1]
+    # 0: SubTask 1: Slice the Tomato
+    # 1: Go to the Knife using robot1.
+    GoToObject(robot_list[0],'Knife')
+    # 2: Pick up the Knife using robot1.
+    PickupObject(robot_list[0],'Knife')
+    # 3: Go to the Tomato using robot1.
+    GoToObject(robot_list[0],'Tomato')
+    # 4: Slice the Tomato using robot1.
+    SliceObject(robot_list[0],'Tomato')
+    # 5: Go to the countertop using robot1.
+    GoToObject(robot_list[0],'CounterTop')
+    # 6: Put the Knife back on the CounterTop using robot1.
+    PutObject(robot_list[0],'Knife', 'CounterTop')
+
+# Execute SubTask 1
+slice_tomato([robots[0]])
+
+# Task slice the tomato is done
+no_trans = 1
 
 for i in range(25):
     action_queue.append({'action':'Done'})
@@ -1181,10 +1284,8 @@ for i in range(25):
 task_over = True
 time.sleep(5)
 
-if total_exec != 0:
-    exec = float(success_exec) / float(total_exec)
-else:
-    exec = 0.0
+
+exec = float(success_exec) / float(total_exec)
 
 print (ground_truth)
 objs = list([obj for obj in c.last_event.metadata["objects"]])

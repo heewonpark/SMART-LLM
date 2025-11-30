@@ -1,0 +1,6 @@
+# Robot 1, 2 and 3 have 13 skills. All robots do have same number of skills.
+# All the robots share the same set and number of skills (no_skills) & all objects DONOT have same mass. In this case where all robots have same skills and all objects have different mass- Focus on Task Allocation based on Mass alone. 
+# Analyze the mass required for each object being PickedUp by the 'PickupObject' skill, and the mass capacity each robot possesses. In this scenario, we have one main subtask: 'Slice the Tomato'.
+# For the 'Slice the Tomato' subtask, it can be performed by any robot with 'GoToObject', 'PickupObject', 'SliceObject' and 'PutObject' skills. However, no individual robot has all these skills. This is a skill gap that needs to be addressed. Form a team of robots. The combined mass capacity of the team must be greater than or equal to 0.11999998986721039 (mass of Tomato). Team of Robots 1,2 or 3 can perform this task as they all individually meet this requirement.
+# No teams are required since SubTasks can be performed with individual robots as explained above.
+# The 'Slice the Tomato' subtask is assigned to Robot 1 as it has sufficient mass capacity to handle tomato's weight and also has necessary skills to perform task.
