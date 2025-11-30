@@ -50,7 +50,6 @@ robots = [{'name': 'robot1', 'skills': ['GoToObject', 'OpenObject', 'CloseObject
 
 floor_no = 15
 
-OBSTACLE = "Pot"
 
 ground_truth = [{'name': 'Fridge', 'contains': ['Apple'], 'state': None}, {'name': 'LightSwitch', 'contains': [], 'state': 'OFF'}]
 no_trans_gt = 1
@@ -92,26 +91,6 @@ def _find_first(pattern):
         if re.match(pattern, o["objectId"]):
             return o
     return None
-
-def _obj_center(regex):
-    for o in c.last_event.metadata["objects"]:
-        if re.match(regex, o["objectId"]):
-            return o["axisAlignedBoundingBox"]["center"]
-    return None
-
-def _agent_pos(agent_id: int):
-    m = c.last_event.events[agent_id].metadata["agent"]["position"]
-    return (m["x"], m["y"], m["z"])
-
-def nav_cost(agent_name: str, obj_regex: str) -> float:
-    """2D distance from agent to closest reachable point near the object (uses your closest_node)."""
-    agent_id = int(agent_name[-1]) - 1
-    ctr = _obj_center(obj_regex)
-    if not ctr: return float("inf")
-    dest = [ctr["x"], ctr["y"], ctr["z"]]
-    cp = closest_node(dest, reachable_positions, 1, [0])[0]  # (x,y,z)
-    ax, ay, az = _agent_pos(agent_id)
-    return distance_pts((ax, ay, az), (cp[0], cp[1], cp[2]))
 
 def set_lights_off_initial():
     sw = _find_first(r"LightSwitch.*")
@@ -731,51 +710,9 @@ def ThrowObject(robot, sw_obj):
     action_queue.append({'action':'ThrowObject', 'objectId':sw_obj_id, 'agent_id':agent_id}) 
     time.sleep(1)
 
-
-def broadcast(message):
-    bus = Bus.get()
-    for robot in robots:
-        print(f"publishing to message {message} {robot['name']}")
-        bus.publish(robot["name"], message)
-
-
-def auction_announce(task_name: str, args: dict, dest_regex: str, window=1):
-    """
-    Announce a task keyed by 'dest_regex' (what they must go to first).
-    All agents bid with their distance; lowest wins and executes.
-    """
-    bus = Bus.get()
-    tid = str(time.time_ns())
-    ann = {"id": tid, "task": task_name, "args": args or {}, "dest": dest_regex}
-
-    broadcast({"type": "auction.announce"} | ann)
-    deadline = time.time() + window
-    bids = []
-    seen = set()
-    while time.time() < deadline:
-        for robot in robots:
-            payload = bus.wait(f"auction.bid:{tid}:{robot['name']}", timeout=deadline - time.time())
-            bus.clear(f"auction.bid:{tid}:{robot['name']}")
-            if payload and payload["who"] not in seen:
-                bids.append(payload)
-                seen.add(payload["who"])
-                print(f"bid received {payload}")
-                #bus.clear(f"auction.bid:{tid}")
-
-    if not bids:
-        return None, tid
-
-    bids.sort(key=lambda b: b["cost"])
-    winner = bids[0]["who"]
-
-    print(f"bids {bids} winner {winner}")
-    #bus.clear(f"auction.award:{tid}")
-    broadcast({"winner": winner, **ann})
-    return winner, tid
-
 def put_apple_in_fridge(robot_list):
     bus = Bus.get()
-    print(f"put_apple_in_fridge {robot_list}")
+    print("put_apple_in_fridge {robot_list}")
     # robot_list = [robot1]
     # 0: SubTask 1: Put apple in the fridge
     # 1: Go to the Apple using robot1.
@@ -785,14 +722,7 @@ def put_apple_in_fridge(robot_list):
     # 3: Go to the Fridge using robot1.
     GoToObject(robot_list[0],'Fridge')
 
-    #bus.publish("robot3", {"task": "move_obstacle"})
-    auction_announce(
-        "move_obstacle",
-        {"object": OBSTACLE, "near": OBSTACLE},
-        dest_regex=fr"{OBSTACLE}.*",
-        window=1
-    )
-
+    bus.publish("robot3", {"task": "move_obstacle"})
     bus.wait("move_obstacle_done")
 
     GoToObject(robot_list[0],'Fridge')
@@ -804,19 +734,20 @@ def put_apple_in_fridge(robot_list):
     #CloseObject(robot_list[0],'Fridge')
 
 def switch_on_light(robot_list):
-    print(f"switch on light {robot_list}")
+    bus = Bus.get()
+    print("switch on light {robot_list}")
     # robot_list = [robot2]
     # 0: SubTask 2: Switch off the light
     # 1: Go to the LightSwitch using robot2.
     GoToObject(robot_list[0],'LightSwitch')
     # 2: Switch off the LightSwitch using robot2.
     SwitchOn(robot_list[0],'LightSwitch')
-    #bus.publish("robot2", {"task": "put_apple_in_fridge"})
+    bus.publish("robot2", {"task": "put_apple_in_fridge"})
 
 def open_fridge_door(robot_list):
     #bus = Bus.get()
     #bus.wait("help")
-    print(f"open_fridge_door {robot_list}")
+    print("open_fridge_door {robot_list}")
     GoToObject(robot_list[0], "Fridge")
     OpenObject(robot_list[0], "Fridge")
     #bus.publish("open_fridge_door_done")
@@ -842,68 +773,43 @@ def move_obstacle(robot_list):
 
 
 def awaiting_task(robot_list):
-    """
-    Each robot idles here:
-    - waits for auctions
-    - bids with nav_cost to dest
-    - if awarded, runs minimal handler below
-    """
+    """Idle worker: waits until someone broadcasts a task for it."""
     bus = Bus.get()
-    me = robot_list[0]["name"]
+    # Wait until the lights are on (partial observability gate)
+    #print(f"[{robot['name']}] waiting for lights_on")
+    #bus.clear("lights_on")
+    #bus.wait("lights_on")  # unblocks when R1 turns lights on
 
-    while True:
-        msg = bus.wait(me)
-        bus.clear(me)
-        msg_type = msg.get("type")
-        if msg_type == "shutdown":
-            break
-        elif msg_type == "auction.announce":
-            # Bid on distance to announced dest
-            cost = nav_cost(me, msg["dest"])
-            print(f"{me} got task {msg}")
-            #bus.clear(f"auction.bid:{msg['id']}")
-            #bus.publish(f"auction.bid:{msg['id']}", {"who": me, "cost": cost})
-            bus.publish(f"auction.bid:{msg['id']}:{me}", {"who": me, "cost": cost})
+    #print(f"[{robot['name']}] waiting for task")
+    #while True:
+    msg = bus.wait(robot_list[0]['name']) # e.g., {"task": "pick_and_place_apple", "target": "robot2"}
+    #if not msg:
+    #    continue
+    #if msg.get("target") and msg["target"] != robot["name"]:
+    #    continue
 
-            # If you didn’t win, ignore
-            award = bus.wait(me)
-            bus.clear(me)
-            print(f"{me} got results {award}")
-            if not award or award.get("winner") != me:
-                continue
+    t = msg.get("task")
+    try:
+        if t == "open_fridge_door":
+            open_fridge_door(robot_list)
+        elif t == "move_obstacle":
+            move_obstacle(robot_list)
+        elif t == "put_apple_in_fridge":
+            put_apple_in_fridge(robot_list)
+    finally:
+        print(f"{t}_done")
+        bus.publish(f"{t}_done")
 
-            # --- Minimal handlers (parameterized), using your primitives ---
-            t, args = award["task"], award.get("args", {})
 
-            try:
-                if t == "switch_on_light":
-                    switch_on_light(robot_list)
-                    auction_announce("put_apple_in_fridge", {}, r"Apple.*")
-                elif t == "put_apple_in_fridge":
-                    put_apple_in_fridge(robot_list)
-                    # last task.. consider a queue of tasks instead
-                elif t == "open_fridge_door":
-                    open_fridge_door(robot_list)
-                elif t == "move_obstacle":
-                    move_obstacle(robot_list)
-            finally:
-                print(f"{t}_done")
-                bus.publish(f"{t}_done")
-                if t == "put_apple_in_fridge":
-                    broadcast({"type":"shutdown"})
-                    break
 
-       
 # Parallelize SubTask 1 and SubTask 2
-task1_thread = threading.Thread(target=awaiting_task, args=([robots[0]],))
+task1_thread = threading.Thread(target=switch_on_light, args=([robots[0]],))
 task2_thread = threading.Thread(target=awaiting_task, args=([robots[1]],))
 task3_thread = threading.Thread(target=awaiting_task, args=([robots[2]],))
 # Start executing SubTask 1 and SubTask 2 in parallel
 task1_thread.start()
 task2_thread.start()
 task3_thread.start()
-
-auction_announce("switch_on_light", {}, r"LightSwitch.*")
 
 # Wait for both SubTask 1 and SubTask 2 to finish
 task1_thread.join()
