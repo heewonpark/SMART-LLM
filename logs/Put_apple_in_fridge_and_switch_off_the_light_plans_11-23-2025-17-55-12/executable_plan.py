@@ -80,11 +80,38 @@ for i in range (no_robot):
     c.step(dict(action="Teleport", position=init_pos, agentId=i))
     
 objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
-# print (objs)
+print (objs)
     
 # x = c.step(dict(action="RemoveFromScene", objectId='Lettuce|+01.11|+00.83|-01.43'))
 #c.step({"action":"InitialRandomSpawn", "excludedReceptacles":["Microwave", "Pan", "Chair", "Plate", "Fridge", "Cabinet", "Drawer", "GarbageCan"]})
 # c.step({"action":"InitialRandomSpawn", "excludedReceptacles":["Cabinet", "Drawer", "GarbageCan"]})
+def _find_first(pattern):
+    objs = [o for o in c.last_event.metadata["objects"]]
+    for o in objs:
+        if re.match(pattern, o["objectId"]):
+            return o
+    return None
+
+def set_lights_off_initial():
+    sw = _find_first(r"LightSwitch.*")
+    if sw:
+        c.step(action="ToggleObjectOff", objectId=sw["objectId"], forceAction=True)
+
+def block_fridge_with_obstacle():
+    fridge = _find_first(r"Fridge.*")
+    obs  = _find_first(r"Pot")
+    if not (fridge and obs):
+        print("[setup] Could not find Fridge or Obstacle to block.")
+        return
+    fc = fridge["axisAlignedBoundingBox"]["center"]
+    cc = obs["axisAlignedBoundingBox"]["center"]
+    # drop the obstacle directly “in front” of fridge (small x offset)
+    #target = {"x": fc["x"] + 0.5, "y": cc["y"] + 0.5, "z": fc["z"]}
+    target = {"x": fc["x"] + 0.1, "y": fc["y"] + 0.1, "z": fc["z"] - 0.3}
+
+    rot = {"x": 0.0, "y": 0.0, "z": 0.0}
+    c.step(action="TeleportObject", objectId=obs["objectId"], position=target, rotation=rot, forceAction=True)
+
 
 action_queue = []
 
@@ -95,6 +122,11 @@ recp_id = None
 for i in range (no_robot):
     multi_agent_event = c.step(action="LookDown", degrees=35, agentId=i)
     # c.step(action="LookUp", degrees=30, 'agent_id':i)
+
+# --- apply scene prep ---
+set_lights_off_initial()
+block_fridge_with_obstacle()
+
 
 def exec_actions():
     global total_exec, success_exec
@@ -239,6 +271,119 @@ def exec_actions():
 actions_thread = threading.Thread(target=exec_actions)
 actions_thread.start()
 
+def GoToPos(robots, dest_position):
+    global recp_id
+    
+    # check if robots is a list
+    if not isinstance(robots, list):
+        # convert robot to a list
+        robots = [robots]
+    
+    no_agents = len (robots)
+    # robots distance to the goal 
+    dist_goals = [10.0] * len(robots)
+    prev_dist_goals = [10.0] * len(robots)
+    count_since_update = [0] * len(robots)
+    clost_node_location = [0] * len(robots)
+    
+    # # list of objects in the scene and their centers
+    # objs = list([obj["objectId"] for obj in c.last_event.metadata["objects"]])
+    # objs_center = list([obj["axisAlignedBoundingBox"]["center"] for obj in c.last_event.metadata["objects"]])
+    # if "|" in dest_obj:
+    #     # obj alredy given
+    #     dest_obj_id = dest_obj
+    #     pos_arr = dest_obj_id.split("|")
+    #     dest_obj_center = {'x': float(pos_arr[1]), 'y': float(pos_arr[2]), 'z': float(pos_arr[3])}
+    # else:
+    #     for idx, obj in enumerate(objs):
+            
+    #         match = re.match(dest_obj, obj)
+    #         if match is not None:
+    #             dest_obj_id = obj
+    #             dest_obj_center = objs_center[idx]
+    #             if dest_obj_center != {'x': 0.0, 'y': 0.0, 'z': 0.0}:
+    #                 break # find the first instance
+        
+    # print ("Going to ", dest_obj_id, dest_obj_center)
+        
+    # dest_obj_pos = [dest_obj_center['x'], dest_obj_center['y'], dest_obj_center['z']] 
+    
+    # closest reachable position for each robot
+    # all robots cannot reach the same spot 
+    # differt close points needs to be found for each robot
+    dest_pos = [dest_position['x'], dest_position['y'], dest_position['z']] 
+    crp = closest_node(dest_pos, reachable_positions, no_agents, clost_node_location)
+    
+    goal_thresh = 0.25
+    # at least one robot is far away from the goal
+    
+    while all(d > goal_thresh for d in dist_goals):
+        for ia, robot in enumerate(robots):
+            robot_name = robot['name']
+            agent_id = int(robot_name[-1]) - 1
+            
+            # get the pose of robot        
+            metadata = c.last_event.events[agent_id].metadata
+            location = {
+                "x": metadata["agent"]["position"]["x"],
+                "y": metadata["agent"]["position"]["y"],
+                "z": metadata["agent"]["position"]["z"],
+                "rotation": metadata["agent"]["rotation"]["y"],
+                "horizon": metadata["agent"]["cameraHorizon"]}
+            
+            prev_dist_goals[ia] = dist_goals[ia] # store the previous distance to goal
+            dist_goals[ia] = distance_pts([location['x'], location['y'], location['z']], crp[ia])
+            
+            dist_del = abs(dist_goals[ia] - prev_dist_goals[ia])
+            # print (ia, "Dist to Goal: ", dist_goals[ia], dist_del, clost_node_location[ia])
+            if dist_del < 0.2:
+                # robot did not move 
+                count_since_update[ia] += 1
+            else:
+                # robot moving 
+                count_since_update[ia] = 0
+                
+            if count_since_update[ia] < 8:
+                action_queue.append({'action':'ObjectNavExpertAction', 'position':dict(x=crp[ia][0], y=crp[ia][1], z=crp[ia][2]), 'agent_id':agent_id})
+            else:    
+                #updating goal
+                clost_node_location[ia] += 1
+                count_since_update[ia] = 0
+                crp = closest_node(dest_pos, reachable_positions, no_agents, clost_node_location)
+    
+            time.sleep(0.5)
+
+    # align the robot once goal is reached
+    # compute angle between robot heading and object
+    metadata = c.last_event.events[agent_id].metadata
+    robot_location = {
+        "x": metadata["agent"]["position"]["x"],
+        "y": metadata["agent"]["position"]["y"],
+        "z": metadata["agent"]["position"]["z"],
+        "rotation": metadata["agent"]["rotation"]["y"],
+        "horizon": metadata["agent"]["cameraHorizon"]}
+    
+    robot_object_vec = [dest_pos[0] -robot_location['x'], dest_pos[2]-robot_location['z']]
+    y_axis = [0, 1]
+    unit_y = y_axis / np.linalg.norm(y_axis)
+    unit_vector = robot_object_vec / np.linalg.norm(robot_object_vec)
+    
+    angle = math.atan2(np.linalg.det([unit_vector,unit_y]),np.dot(unit_vector,unit_y))
+    angle = 360*angle/(2*np.pi)
+    angle = (angle + 360) % 360
+    rot_angle = angle - robot_location['rotation']
+    
+    if rot_angle > 0:
+        action_queue.append({'action':'RotateRight', 'degrees':abs(rot_angle), 'agent_id':agent_id})
+    else:
+        action_queue.append({'action':'RotateLeft', 'degrees':abs(rot_angle), 'agent_id':agent_id})
+        
+    # print ("Reached: ", dest_obj)
+    # if dest_obj == "Cabinet" or dest_obj == "Fridge" or dest_obj == "CounterTop":
+    #     recp_id = dest_obj_id
+
+
+
 def GoToObject(robots, dest_obj):
     global recp_id
     
@@ -357,7 +502,7 @@ def PickupObject(robots, pick_obj):
     # robots distance to the goal 
     for idx in range(no_agents):
         robot = robots[idx]
-        print ("PIcking: ", pick_obj)
+        print ("Picking: ", pick_obj)
         robot_name = robot['name']
         agent_id = int(robot_name[-1]) - 1
         # list of objects in the scene and their centers
@@ -566,6 +711,8 @@ def ThrowObject(robot, sw_obj):
     time.sleep(1)
 
 def put_apple_in_fridge(robot_list):
+    bus = Bus.get()
+    print("put_apple_in_fridge {robot_list}")
     # robot_list = [robot1]
     # 0: SubTask 1: Put apple in the fridge
     # 1: Go to the Apple using robot1.
@@ -574,46 +721,100 @@ def put_apple_in_fridge(robot_list):
     PickupObject(robot_list[0],'Apple')
     # 3: Go to the Fridge using robot1.
     GoToObject(robot_list[0],'Fridge')
+
+    bus.publish("robot3", {"task": "move_obstacle"})
+    bus.wait("move_obstacle_done")
+
+    GoToObject(robot_list[0],'Fridge')
     # 4: Open the Fridge using robot1.
-    #OpenObject(robot_list[0],'Fridge')
-
-    bus = Bus.get()
-    bus.publish("help", {"requester", "robot1"})
-    bus.wait("opened")
-
+    OpenObject(robot_list[0],'Fridge')
     # 5: Put Apple in the Fridge using robot1
     PutObject(robot_list[0],'Apple', 'Fridge')
     # 6: Close Fridge using robot1
     #CloseObject(robot_list[0],'Fridge')
 
-def switch_off_light(robot_list):
+def switch_on_light(robot_list):
+    bus = Bus.get()
+    print("switch on light {robot_list}")
     # robot_list = [robot2]
     # 0: SubTask 2: Switch off the light
     # 1: Go to the LightSwitch using robot2.
     GoToObject(robot_list[0],'LightSwitch')
     # 2: Switch off the LightSwitch using robot2.
-    SwitchOff(robot_list[0],'LightSwitch')
-
+    SwitchOn(robot_list[0],'LightSwitch')
+    bus.publish("robot2", {"task": "put_apple_in_fridge"})
 
 def open_fridge_door(robot_list):
+    #bus = Bus.get()
+    #bus.wait("help")
+    print("open_fridge_door {robot_list}")
+    GoToObject(robot_list[0], "Fridge")
+    OpenObject(robot_list[0], "Fridge")
+    #bus.publish("open_fridge_door_done")
+
+def move_obstacle(robot_list):
+    """Move the chair away from the fridge to clear a path."""
+    fridge = _find_first(r"Fridge.*")
+    obs  = _find_first(r"Pot")
+    if not (fridge and obs):
+        return
+    fc = fridge["axisAlignedBoundingBox"]["center"]
+    cc = obs["axisAlignedBoundingBox"]["center"]
+    # 1) go pick up the chair
+    GoToObject(robot_list[0], "Pot")
+    PickupObject(robot_list[0], "Pot")
+    # 2) carry it to a position offset from fridge
+    #away = {"x": fc["x"] + 1.0, "y": cc["y"], "z": fc["z"] + 0.8}
+    #GoToPos([robot_list[0]], away)
+    GoToObject(robot_list[0], "DiningTable")
+    # 3) drop on floor
+    PutObject(robot_list[0], "Pot", "DiningTable")
+    #PullObject(robot_list[0], "Lettuce", away)
+
+
+def awaiting_task(robot_list):
+    """Idle worker: waits until someone broadcasts a task for it."""
     bus = Bus.get()
-    bus.wait("help")
-    GoToObject(robot_list[0], 'Fridge')
-    OpenObject(robot_list[0], 'Fridge')
-    bus.publish("opened", {"by", "robot2"})
+    # Wait until the lights are on (partial observability gate)
+    #print(f"[{robot['name']}] waiting for lights_on")
+    #bus.clear("lights_on")
+    #bus.wait("lights_on")  # unblocks when R1 turns lights on
+
+    #print(f"[{robot['name']}] waiting for task")
+    #while True:
+    msg = bus.wait(robot_list[0]['name']) # e.g., {"task": "pick_and_place_apple", "target": "robot2"}
+    #if not msg:
+    #    continue
+    #if msg.get("target") and msg["target"] != robot["name"]:
+    #    continue
+
+    t = msg.get("task")
+    try:
+        if t == "open_fridge_door":
+            open_fridge_door(robot_list)
+        elif t == "move_obstacle":
+            move_obstacle(robot_list)
+        elif t == "put_apple_in_fridge":
+            put_apple_in_fridge(robot_list)
+    finally:
+        print(f"{t}_done")
+        bus.publish(f"{t}_done")
+
 
 
 # Parallelize SubTask 1 and SubTask 2
-task1_thread = threading.Thread(target=put_apple_in_fridge, args=([robots[0]],))
-task2_thread = threading.Thread(target=open_fridge_door, args=([robots[1]],))
-
+task1_thread = threading.Thread(target=switch_on_light, args=([robots[0]],))
+task2_thread = threading.Thread(target=awaiting_task, args=([robots[1]],))
+task3_thread = threading.Thread(target=awaiting_task, args=([robots[2]],))
 # Start executing SubTask 1 and SubTask 2 in parallel
 task1_thread.start()
 task2_thread.start()
+task3_thread.start()
 
 # Wait for both SubTask 1 and SubTask 2 to finish
 task1_thread.join()
 task2_thread.join()
+task3_thread.join()
 
 # Task put apple in fridge and switch off the light is done
 
@@ -629,7 +830,7 @@ task_over = True
 time.sleep(10)
 
 print("execs", success_exec, total_exec)
-#exec = float(success_exec) / float(total_exec)
+exec = float(success_exec) / float(total_exec)
 
 print (ground_truth)
 objs = list([obj for obj in c.last_event.metadata["objects"]])
